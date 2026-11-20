@@ -128,21 +128,39 @@ end
 
 abstract class NodeValue
 operations
-    getValue() : String
+    getValue() : String = 'not implemented'
 end
 
-class Letter < NodeValue
+class Letter
 attributes
     value : Character
 operations
-    getValue() : String
+    getValue() : String = value.character
 end
 
 class Word < NodeValue
 operations
-    getValue() : String
-    reverseWord() : String
-    matchesPattern(pattern : String) : Boolean
+    initialise(text : String)
+    begin
+        declare l : Letter;
+        for c in text.characters() do
+            l := new Letter();
+            l.value := Character(c);
+            insert (self, l) into WordValue;
+        end;
+    end
+    pre emptyWord: wordValue->isEmpty()
+    pre longEnough: text.size() >= 3
+    post oneLetterPerChar: wordValue->size() = text.size()
+    post spellsText: getValue() = text
+    post freshLetters: wordValue->forAll(l | l.oclIsNew())
+    post ownedOnlyByThisWord: wordValue->forAll(l | l.wordsWithLetters = self)
+
+    getValue() : String =
+        wordValue->iterate(l : Letter; acc : String = '' | acc.concat(l.getValue()))
+    reverseWord() : String =
+        wordValue->reverse()->iterate(l : Letter; acc : String = '' | acc.concat(l.getValue()))
+    matchesPattern(pattern : String) : Boolean 
     matchesPatternInReverse(pattern : String) : Boolean
 end
 
@@ -181,18 +199,210 @@ operations
 end
 
 abstract class BinarySearchTree < BinaryTree
+operations
+    getNodes() : Set(TreeNode) =
+        if root.isUndefined()
+        then Set{}
+        else Set{root}->closure(children)->including(root)
+        endif   
+
+    /*returns the node a new node should be the child of*/
+    findInsertionSlot(word : String) : TreeNode
+    begin
+        declare current : TreeNode, next : TreeNode, done : Boolean;
+        current := self.root;
+        done := false;
+        while done = false do
+            if word < current.value.getValue()
+            then next := current.leftChild();
+            else next := current.rightChild();
+            end;
+            if next.isUndefined()
+            then done := true;
+            else current := next;
+            end;
+        end;
+
+        result := current;
+    end
+    pre rootExists: root->notEmpty()
+    post inTree: getNodes() -> includes(result)
+    post treeUnchanged: getNodes() = getNodes@pre()
+    post slotIsEmpty:
+        if word < result.value.getValue()
+        then result.leftChild().isUndefined()
+        else result.rightChild().isUndefined()
+        endif
 end
 
 abstract class BalancedBinaryTree < BinarySearchTree
+operations
+    /* z's left child y becomes the subtree root; y's right child t moves under z */
+    rotateRight(z : TreeNode)
+    begin
+        declare p : TreeNode, y : TreeNode, t : TreeNode;
+        p := z.parent;
+        y := z.leftChild();
+        t := y.rightChild();
+
+        if p.isUndefined()
+        then delete (self, z) from TreeRoot;
+        else delete (p, z) from Children;
+        end;
+        delete (z, y) from Children;
+        if not t.isUndefined()
+        then delete (y, t) from Children;
+        end;
+
+        if p.isUndefined()
+        then insert (self, y) into TreeRoot;
+        else insert (p, y) into Children;
+        end;
+        insert (y, z) into Children;
+        if not t.isUndefined()
+        then insert (z, t) into Children;
+        end;
+    end
+    pre zInTree: getNodes()->includes(z)
+    pre hasLeftChild: not z.leftChild().isUndefined()
+    post sameNodes: getNodes() = getNodes@pre()
+    post zBelowPivot: z.parent.rightChild() = z
+
+    /* z's right child y becomes the subtree root; y's left child t moves under z */
+    rotateLeft(z : TreeNode)
+    begin
+        declare p : TreeNode, y : TreeNode, t : TreeNode;
+        p := z.parent;
+        y := z.rightChild();
+        t := y.leftChild();
+
+        if p.isUndefined()
+        then delete (self, z) from TreeRoot;
+        else delete (p, z) from Children;
+        end;
+        delete (z, y) from Children;
+        if not t.isUndefined()
+        then delete (y, t) from Children;
+        end;
+
+        if p.isUndefined()
+        then insert (self, y) into TreeRoot;
+        else insert (p, y) into Children;
+        end;
+        insert (y, z) into Children;
+        if not t.isUndefined()
+        then insert (z, t) into Children;
+        end;
+    end
+    pre zInTree: getNodes()->includes(z)
+    pre hasRightChild: not z.rightChild().isUndefined()
+    post sameNodes: getNodes() = getNodes@pre()
+    post zBelowPivot: z.parent.leftChild() = z
 end
 
 class AVLTree < BalancedBinaryTree
+operations
+    add(value : String)
+    begin
+        declare tn : TreeNode, target : TreeNode, current : TreeNode;
+        tn := new TreeNode();
+        tn.initialise(value);
+
+        if self.root.isUndefined()
+        then insert (self, tn) into TreeRoot;
+        else
+            target := self.findInsertionSlot(value);
+            insert (target, tn) into Children;
+        end;
+
+        -- walk up from the new node, rebalancing each ancestor
+        current := tn.parent;
+        while not current.isUndefined() do
+            self.rebalance(current);
+            current := current.parent;
+        end;
+    end
+    pre notPresent: getNodes()->forAll(n | n.value.getValue() <> value)
+    post present: getNodes()->exists(n | n.value.getValue() = value)
+    post oneMore: getNodes()->size() = getNodes@pre()->size() + 1
+
+    rebalance(n : TreeNode)
+    begin
+        if n.getBalanceFactor() > 1
+        then
+            if n.leftChild().getBalanceFactor() >= 0
+            then self.rotateRight(n);                  -- left-left
+            else
+                self.rotateLeft(n.leftChild());        -- left-right
+                self.rotateRight(n);
+            end;
+        else
+            if n.getBalanceFactor() < -1
+            then
+                if n.rightChild().getBalanceFactor() <= 0
+                then self.rotateLeft(n);               -- right-right
+                else
+                    self.rotateRight(n.rightChild());  -- right-left
+                    self.rotateLeft(n);
+                end;
+            end;
+        end;
+    end
+    pre inTree: getNodes()->includes(n)
+    pre notTooFar: n.getBalanceFactor().abs() <= 2
+    post sameNodes: getNodes() = getNodes@pre()
+    post nodeBalanced: n.getBalanceFactor().abs() <= 1
+
+    constraints
+    inv avlBalanced: getNodes()->forAll(n | n.getBalanceFactor().abs() <= 1)
 end
 
 abstract class Node
 end
 
 class TreeNode < Node
+attributes
+operations
+    initialise(word : String)
+    begin
+        declare wd : Word;
+        wd := new Word();
+        wd.initialise(word);
+        insert (self, wd) into Value;
+    end
+    pre noValueYet: value.isUndefined()
+    post holdsWord: value.getValue() = word
+
+    leftChild() : TreeNode =
+        children->select(c | c.value.getValue() < self.value.getValue())->any(true)
+
+    rightChild() : TreeNode =
+        children->select(c | c.value.getValue() >= self.value.getValue())->any(true)
+
+    height() : Integer =
+        if children->isEmpty()
+        then 1
+        else 1 + children->collect(c | c.height())->max()
+        endif
+
+    leftHeight() : Integer =
+        if leftChild().isUndefined() then 0 else leftChild().height() endif
+
+    rightHeight() : Integer =
+        if rightChild().isUndefined() then 0 else rightChild().height() endif
+
+    getBalanceFactor() : Integer = leftHeight() - rightHeight()
+
+    constraints
+    inv atMostTwoChildren: children->size() <= 2
+    inv oneLeftOneRight:
+        children->select(c | c.value.getValue() < self.value.getValue())->size() <= 1 and
+        children->select(c | c.value.getValue() >= self.value.getValue())->size() <= 1
+    inv bstOrdered:
+    children->forAll(c |
+        Set{c}->closure(children)->including(c)->forAll(d |
+            (c.value.getValue() < value.getValue()) =
+            (d.value.getValue() < value.getValue())))
 end
 
 /* ------------------------------------------------------------------ */
@@ -290,7 +500,7 @@ association DictionaryWords between     -- derived (/words) on the diagram
 end
 
 aggregation WordValue between
-    Word[1..*] role wordsWithLetters
+    Word[0..1] role wordsWithLetters
     Letter[3..*] role wordValue ordered
 end
 
@@ -306,9 +516,9 @@ composition Nodes between
     Node[*] role nodes ordered union
 end
 
-composition TreeRoot between
+composition  TreeRoot between
     Tree[0..1] role tree subsets collection redefines collection
-    TreeNode[0..1] role root subsets nodes redefines nodes ordered
+    TreeNode[0..1] role root subsets nodes redefines nodes
 end
 
 composition Children between
@@ -317,6 +527,6 @@ composition Children between
 end
 
 aggregation Value between
-    NodeValue[1] role value
     Node[1..*] role node
+    NodeValue[1] role value
 end

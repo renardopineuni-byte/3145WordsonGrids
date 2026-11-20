@@ -1,0 +1,23 @@
+reset
+-- build the tree
+!create avl : AVLTree
+
+-- add several words with a loop
+!for w in Sequence{'mat', 'cat', 'sat', 'bat', 'rat', 'hat'} do avl.add(w); end
+
+-- or add them one at a time
+-- !avl.add('fat')
+
+-- inspect the result
+?avl.root.value.getValue()
+?avl.root->closure(children)->collect(n | n.value.getValue())
+?avl.root.leftChild().value.getValue()
+?avl.root.rightChild().value.getValue()
+
+?avl.getNodes()
+
+-- check the balance of the tree
+?avl.root.height()
+?avl.root.leftHeight()
+?avl.root.rightHeight()
+?avl.root.getBalanceFactor()

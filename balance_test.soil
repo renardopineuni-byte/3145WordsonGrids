@@ -1,0 +1,35 @@
+reset
+-- right-right: expect root 'mat'
+!create rr : AVLTree
+!rr.add('cat')
+!rr.add('mat')
+!rr.add('sat')
+?rr.root.value.getValue()
+
+-- left-left: expect root 'mat'
+!create ll : AVLTree
+!ll.add('sat')
+!ll.add('mat')
+!ll.add('cat')
+?ll.root.value.getValue()
+
+-- left-right: expect root 'fat'
+!create lr : AVLTree
+!lr.add('mat')
+!lr.add('cat')
+!lr.add('fat')
+?lr.root.value.getValue()
+
+-- right-left: expect root 'mat'
+!create rl : AVLTree
+!rl.add('cat')
+!rl.add('sat')
+!rl.add('mat')
+?rl.root.value.getValue()
+
+-- a larger run
+!create big : AVLTree
+!for w in Sequence{'ant','bat','cat','dog','eel','fox','gnu','hen'} do big.add(w); end
+?big.root.value.getValue()
+?big.root.getBalanceFactor()
+check
