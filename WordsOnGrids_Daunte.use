@@ -1,0 +1,514 @@
+model WordsOnGrids_Daunte
+
+-- Daunte Samuels: WordsOnGrid, Game, Player and Play.
+-- This companion model uses String letters and a small linked dictionary
+-- so the game contract fixture can run with a minimal supporting model.
+
+enum GameStatus {
+    Abandoned,
+    Created,
+    FullyInitialised,
+    Completed,
+    Started,
+    StaleMated,
+    Paused
+}
+
+enum SolveOnUnits {
+    Columns,
+    Rows,
+    Diagonals,
+    RowsAndColumns,
+    All
+}
+
+enum SolvingDirection {
+    TopToBottom,
+    BottomToTop,
+    Both
+}
+
+enum DiagonalDirection {
+    Main,
+    Other
+}
+
+class WordsOnGrid
+operations
+    addGame(sizeOfWords : Integer, dictionary : Set(String))
+    addPlayer(username : String) : Boolean
+    addPlayerToGame(player : String, gameId : Integer)
+    removeGame(id : Integer)
+    removePlayer(username : String)
+    removePlayerFromGame(player : String, gameId : Integer)
+end
+
+class Player
+attributes
+    username : String
+operations
+    play(gameID : Integer, row : Integer, column : Integer, value : Letter)
+end
+
+class Game
+attributes
+    id : Integer
+    sizeOfWords : Integer
+    solvingDirection : SolvingDirection
+    solvingUnits : SolveOnUnits
+    status : GameStatus
+operations
+    addDictionary(words : Set(String))
+    addPlay(row : Integer, column : Integer, value : Letter)
+    addPlayers(players : Set(Player))
+    findWordWithPrefix(prefix : String) : Set(Word)
+    findWordWithPattern(wordPattern : String) : Set(Word)
+    initialiseBoard()
+    removePlayers()
+    updateStatus(status : GameStatus) : Boolean
+
+    -- Queries used by the contracts.
+    rosterOpen() : Boolean =
+        self.status = #Created or self.status = #FullyInitialised
+
+    dictionaryValues() : Set(String) =
+        self.dictionary.words->collect(w | w.getValue())->asSet()
+
+    cellAt(row : Integer, column : Integer) : Cell =
+        self.gameCells->any(c | c.row = row and c.column = column)
+
+    usesRows() : Boolean =
+        Set{#Rows, #RowsAndColumns, #All}->includes(self.solvingUnits)
+
+    usesColumns() : Boolean =
+        Set{#Columns, #RowsAndColumns, #All}->includes(self.solvingUnits)
+
+    usesDiagonals() : Boolean =
+        Set{#Diagonals, #All}->includes(self.solvingUnits)
+
+    boardReady() : Boolean =
+        let n : Integer = self.sizeOfWords in
+        self.gameCells->size() = n * n and
+        self.gameUnits->size() =
+            (if self.usesRows() then n else 0 endif) +
+            (if self.usesColumns() then n else 0 endif) +
+            (if self.usesDiagonals() then 2 else 0 endif) and
+        Sequence{1..n}->forAll(i |
+            (if self.usesRows() then
+                self.gameUnits->one(u | if u.oclIsTypeOf(Row) then
+                    u.oclAsType(Row).index = i and u.suCells->size() = n and
+                    Sequence{1..n}->forAll(j | u.suCells->at(j) = self.cellAt(i, j))
+                else false endif)
+            else true endif) and
+            (if self.usesColumns() then
+                self.gameUnits->one(u | if u.oclIsTypeOf(Column) then
+                    u.oclAsType(Column).index = i and u.suCells->size() = n and
+                    Sequence{1..n}->forAll(j | u.suCells->at(j) = self.cellAt(j, i))
+                else false endif)
+            else true endif)) and
+        (if self.usesDiagonals() then
+            self.gameUnits->one(u | if u.oclIsTypeOf(Diagonal) then
+                u.oclAsType(Diagonal).direction = #Main and u.suCells->size() = n and
+                Sequence{1..n}->forAll(i | u.suCells->at(i) = self.cellAt(i, i))
+            else false endif) and
+            self.gameUnits->one(u | if u.oclIsTypeOf(Diagonal) then
+                u.oclAsType(Diagonal).direction = #Other and u.suCells->size() = n and
+                Sequence{1..n}->forAll(i | u.suCells->at(i) = self.cellAt(i, n + 1 - i))
+            else false endif)
+        else true endif)
+
+    canPlayAt(row : Integer, column : Integer, value : Letter) : Boolean =
+        self.status = #Started and self.players->size() = 2 and value.isDefined() and
+        self.alphabetForWords->includes(value) and
+        self.gameCells->exists(c | c.row = row and c.column = column and
+            c.valueInCell.isUndefined())
+
+    unitMatches(unit : SolvableUnit, word : Word, backwards : Boolean) : Boolean =
+        let n : Integer = self.sizeOfWords in
+        unit.suCells->size() = n and word.wordValue->size() = n and
+        Sequence{1..n}->forAll(i |
+            let letter : Letter = unit.suCells->at(i).valueInCell in
+            if letter.isUndefined() then true else
+                let j : Integer = if backwards then n + 1 - i else i endif in
+                letter.getValue() = word.wordValue->at(j).getValue()
+            endif)
+
+    unitHasPotentialWord(unit : SolvableUnit) : Boolean =
+        self.dictionary.words->exists(w |
+            (self.solvingDirection <> #BottomToTop and self.unitMatches(unit, w, false)) or
+            (self.solvingDirection <> #TopToBottom and self.unitMatches(unit, w, true)))
+
+    hasPotentialWord() : Boolean =
+        self.gameUnits->exists(u | self.unitHasPotentialWord(u))
+
+    hasWinningWord() : Boolean =
+        self.gameUnits->exists(u | u.suCells->forAll(c | c.valueInCell.isDefined())
+            and self.unitHasPotentialWord(u))
+
+    canChangeStatus(target : GameStatus) : Boolean =
+        target = self.status or
+        (target = #Started and
+            (self.status = #FullyInitialised or self.status = #Paused) and
+            self.players->size() = 2 and self.hasPotentialWord() and not self.hasWinningWord()) or
+        (target = #Paused and self.status = #Started) or
+        (target = #Abandoned and Set{#Created, #FullyInitialised, #Started, #Paused}
+            ->includes(self.status))
+end
+
+class Play
+operations
+    updateValue(value : Letter)
+end
+
+-- Supporting types for the four assigned classes and the SOIL fixture.
+class Cell
+attributes
+    row : Integer
+    column : Integer
+end
+
+abstract class SolvableUnit
+end
+
+abstract class IndexedSolvableUnit < SolvableUnit
+attributes
+    index : Integer
+end
+
+class Row < IndexedSolvableUnit
+end
+
+class Column < IndexedSolvableUnit
+end
+
+class Diagonal < SolvableUnit
+attributes
+    direction : DiagonalDirection
+end
+
+class Letter
+attributes
+    value : String
+operations
+    getValue() : String = self.value
+end
+
+class Word
+operations
+    getValue() : String =
+        self.wordValue->iterate(letter : Letter; text : String = '' |
+            text.concat(letter.getValue()))
+end
+
+class Dictionary
+attributes
+    searchOption : SolvingDirection
+operations
+    -- Match a prefix or a full pattern in each enabled search direction.
+    matchesSearch(word : Word, query : String, backwards : Boolean,
+                  allowWildcard : Boolean) : Boolean =
+        let n : Integer = word.wordValue->size() in
+        if query.size() = 0 then true
+        else if query.size() > n then false
+        else
+            Sequence{1..query.size()}->forAll(i |
+                let character : String = query.substring(i, i) in
+                let position : Integer = if backwards then n + 1 - i else i endif in
+                    (allowWildcard and character = '?') or
+                    character = word.wordValue->at(position).getValue())
+        endif endif
+
+    findPotentialWord(wordPrefix : String) : Set(Word) =
+        self.words->select(w |
+            (self.searchOption <> #BottomToTop and
+                self.matchesSearch(w, wordPrefix, false, false)) or
+            (self.searchOption <> #TopToBottom and
+                self.matchesSearch(w, wordPrefix, true, false)))->asSet()
+
+    -- A question mark matches one letter in a full-length pattern.
+    findWordWithPattern(wordPattern : String) : Set(Word) =
+        self.words->select(w | w.wordValue->size() = wordPattern.size() and
+            ((self.searchOption <> #BottomToTop and
+                self.matchesSearch(w, wordPattern, false, true)) or
+             (self.searchOption <> #TopToBottom and
+                self.matchesSearch(w, wordPattern, true, true))))->asSet()
+end
+
+-- Associations used by the assigned classes and the fixture.
+
+composition Games between
+    WordsOnGrid[1] role wordsOnGrid
+    Game[*] role games
+end
+
+composition RegisteredPlayers between
+    WordsOnGrid[1] role wordsOnGrid
+    Player[*] role players
+end
+
+aggregation GameCells between
+    Game[1] role game
+    Cell[*] role gameCells ordered
+end
+
+composition GameUnits between
+    Game[1] role game
+    SolvableUnit[*] role gameUnits
+end
+
+aggregation GamePlay between
+    Game[1] role game
+    Play[*] role plays ordered
+end
+
+association GamePlayers between
+    Game[*] role games
+    Player[0..2] role players
+end
+
+association GameWinner between          -- derived (/winner) on the diagram
+    Game[*] role gamesWon
+    Player[0..1] role winner
+end
+
+aggregation GameDictionary between
+    Dictionary[1] role dictionary
+    Game[*] role games
+end
+
+aggregation GameAlphabet between
+    Game[1..*] role alphabetForGame
+    Letter[*] role alphabetForWords
+end
+
+association CellPlay between
+    Cell[1] role cell
+    Play[0..1] role play
+end
+
+association CellValue between
+    Cell[*] role valueForCell
+    Letter[0..1] role valueInCell
+end
+
+association PlayValue between
+    Letter[1] role playValue
+    Play[*] role play
+end
+
+aggregation WhoPlayed between
+    Player[1] role player
+    Play[*] role plays ordered
+end
+
+aggregation LinkedCells between
+    Cell[3..*] role suCells ordered
+    SolvableUnit[0..4] role belongsTo
+end
+
+association DictionaryWords between
+    Dictionary[1] role dictionary
+    Word[*] role words ordered
+end
+
+aggregation WordValue between
+    Word[1..*] role wordsWithLetters
+    Letter[3..*] role wordValue ordered
+end
+
+constraints
+
+context WordsOnGrid
+    inv UniqueGameIds: self.games->isUnique(g | g.id)
+    inv UniqueUsernames: self.players->isUnique(p | p.username)
+
+context Player
+    inv NonEmptyUsername: self.username.isDefined() and self.username.size() > 0
+    inv RegisteredInEachGame: self.games->forAll(g | g.wordsOnGrid = self.wordsOnGrid)
+    inv PlayOrderMatchesGameOrder:
+        self.games->forAll(g |
+            self.plays->select(p | p.game = g) = g.plays->select(p | p.player = self))
+
+context Game
+    inv ValidSetup:
+        self.id.isDefined() and self.sizeOfWords >= 3 and self.status.isDefined() and
+        self.dictionary.words->notEmpty() and self.dictionary.words->forAll(w |
+            w.wordValue->size() = self.sizeOfWords and
+            w.wordValue->forAll(l | self.alphabetForWords->includes(l)))
+    inv RegisteredParticipants: self.wordsOnGrid.players->includesAll(self.players)
+    inv TwoPlayersWhenPlaying:
+        (Set{#Started, #Paused, #Completed, #StaleMated}->includes(self.status) or
+         self.plays->notEmpty()) implies self.players->size() = 2
+    inv ValidBoard:
+        if self.status = #Created or
+            (self.status = #Abandoned and self.gameCells->isEmpty()) then
+            self.gameCells->isEmpty() and self.gameUnits->isEmpty() and self.plays->isEmpty()
+        else
+            self.solvingUnits.isDefined() and self.solvingDirection.isDefined() and
+            self.dictionary.searchOption = self.solvingDirection and self.boardReady()
+        endif
+    inv NoMovesBeforeStart: self.rosterOpen() implies self.plays->isEmpty()
+    inv ValidCellCoordinates:
+        self.gameCells->forAll(c | c.row >= 1 and c.row <= self.sizeOfWords and
+            c.column >= 1 and c.column <= self.sizeOfWords) and
+        self.gameCells->forAll(a, b | a = b or a.row <> b.row or a.column <> b.column)
+    inv BoardUsesAllowedLetters:
+        self.gameCells->forAll(c | c.valueInCell.isUndefined() or
+            self.alphabetForWords->includes(c.valueInCell))
+    inv AlternatingTurns:
+        if self.plays->size() < 2 then true else
+            Sequence{2..self.plays->size()}->forAll(i |
+                self.plays->at(i - 1).player <> self.plays->at(i).player)
+        endif
+    inv WinnerIsLastPlayer:
+        if self.status = #Completed then
+            self.plays->notEmpty() and self.winner = self.plays->last().player and
+            self.hasWinningWord()
+        else self.winner.isUndefined() endif
+    inv StalemateHasNoPossibleWord:
+        self.status = #StaleMated implies not self.hasPotentialWord()
+    inv ActiveGameCanContinue:
+        Set{#Started, #Paused}->includes(self.status) implies
+            (self.hasPotentialWord() and not self.hasWinningWord())
+
+context Play
+    inv BelongsToGameParticipant: self.game.players->includes(self.player)
+    inv CellBelongsToGame: self.cell.game = self.game
+    inv AllowedLetter: self.game.alphabetForWords->includes(self.playValue)
+    inv CellShowsPlayedLetter: self.cell.valueInCell = self.playValue
+
+context WordsOnGrid::addGame(sizeOfWords : Integer, dictionary : Set(String))
+    pre ValidInput: sizeOfWords >= 3 and dictionary->notEmpty() and
+        dictionary->forAll(w | w.size() = sizeOfWords)
+    post ExpectedOutcome: let added : Set(Game) = self.games - self.games@pre in
+        added->size() = 1 and self.games->includesAll(self.games@pre) and
+        added->forAll(g | g.oclIsNew() and g.sizeOfWords = sizeOfWords and
+            g.status = #Created and g.players->isEmpty() and
+            g.gameCells->isEmpty() and g.gameUnits->isEmpty() and
+            g.plays->isEmpty() and g.dictionary.words->collect(w | w.getValue())->asSet() = dictionary)
+        and self.players = self.players@pre
+
+context WordsOnGrid::addPlayer(username : String) : Boolean
+    pre ValidInput: username.size() > 0
+    post ExpectedOutcome: if self.players@pre->exists(p | p.username@pre = username) then
+        not result and self.players = self.players@pre
+    else
+        let added : Set(Player) = self.players - self.players@pre in
+        result and self.players->includesAll(self.players@pre) and
+        added->size() = 1 and added->forAll(p | p.oclIsNew() and p.username = username)
+    endif
+    post GamesPreserved: self.games = self.games@pre
+
+context WordsOnGrid::addPlayerToGame(player : String, gameId : Integer)
+    pre ValidInput: self.players->exists(p | p.username = player) and
+        self.games->exists(g | g.id = gameId and g.rosterOpen() and
+            g.players->size() < 2 and g.players->forAll(p | p.username <> player))
+    post ExpectedOutcome: let g : Game = self.games->any(x | x.id = gameId) in
+    let p : Player = self.players->any(x | x.username = player) in
+        g.players = g.players@pre->including(p) and self.games = self.games@pre and
+        self.players = self.players@pre and self.games->excluding(g)->forAll(other |
+            other.players = other.players@pre)
+
+context WordsOnGrid::removeGame(id : Integer)
+    pre ValidInput: self.games->exists(g | g.id = id)
+    post ExpectedOutcome:
+        let deleted : Game = self.games@pre->any(g | g.id@pre = id) in
+        self.games = self.games@pre->excluding(deleted) and self.players = self.players@pre and
+        Game.allInstances = Game.allInstances@pre->excluding(deleted) and
+        Play.allInstances = Play.allInstances@pre - deleted.plays@pre->asSet() and
+        Cell.allInstances = Cell.allInstances@pre - deleted.gameCells@pre->asSet() and
+        SolvableUnit.allInstances = SolvableUnit.allInstances@pre - deleted.gameUnits@pre
+
+context WordsOnGrid::removePlayer(username : String)
+    pre ValidInput: self.players->exists(p | p.username = username and
+        p.games->isEmpty() and p.gamesWon->isEmpty() and p.plays->isEmpty())
+    post ExpectedOutcome: self.players = self.players@pre->reject(p | p.username@pre = username) and
+        Player.allInstances = Player.allInstances@pre->reject(p |
+            self.players@pre->includes(p) and p.username@pre = username) and self.games = self.games@pre
+
+context WordsOnGrid::removePlayerFromGame(player : String, gameId : Integer)
+    pre ValidInput: self.games->exists(g | g.id = gameId and g.rosterOpen() and
+        g.players->exists(p | p.username = player))
+    post ExpectedOutcome: let g : Game = self.games->any(x | x.id = gameId) in
+        g.players = g.players@pre->reject(p | p.username@pre = player) and self.games = self.games@pre and
+        self.players = self.players@pre and self.games->excluding(g)->forAll(other |
+            other.players = other.players@pre)
+
+context Game::addDictionary(words : Set(String))
+    pre ValidInput: self.status = #Created and self.dictionary.games->size() = 1 and words->notEmpty() and
+        words->forAll(w | w.size() = self.sizeOfWords)
+    post ExpectedOutcome: self.dictionary = self.dictionary@pre and
+        self.dictionaryValues() = self.dictionaryValues@pre()->union(words)
+
+context Game::addPlay(row : Integer, column : Integer, value : Letter)
+    pre ValidInput: self.canPlayAt(row, column, value)
+    post ExpectedOutcome: self.plays->size() = self.plays@pre->size() + 1 and
+    self.plays = self.plays@pre->append(self.plays->last()) and
+    self.plays->last().oclIsNew() and self.plays->last().playValue = value and
+    self.plays->last().cell = self.cellAt(row, column) and
+    self.cellAt(row, column).valueInCell = value and
+    self.gameCells = self.gameCells@pre and
+    self.gameCells->excluding(self.cellAt(row, column))->forAll(c |
+        c.valueInCell = c.valueInCell@pre) and self.players = self.players@pre and
+    (if self.hasWinningWord() then self.status = #Completed
+     else if self.hasPotentialWord() then self.status = #Started
+     else self.status = #StaleMated endif endif)
+
+context Game::addPlayers(players : Set(Player))
+    pre ValidInput: self.rosterOpen() and players->notEmpty() and
+        self.wordsOnGrid.players->includesAll(players) and
+        self.players->intersection(players)->isEmpty() and
+        self.players->union(players)->size() <= 2
+    post ExpectedOutcome: self.players = self.players@pre->union(players)
+
+context Game::findWordWithPrefix(prefix : String) : Set(Word)
+    pre ValidInput: prefix.size() > 0 and prefix.size() <= self.sizeOfWords
+    post ExpectedOutcome: result = self.dictionary.findPotentialWord(prefix) and
+        result->forAll(w | self.dictionary.words->includes(w))
+
+context Game::findWordWithPattern(wordPattern : String) : Set(Word)
+    pre ValidInput: wordPattern.size() = self.sizeOfWords
+    post ExpectedOutcome: result = self.dictionary.findWordWithPattern(wordPattern) and
+        result->forAll(w | self.dictionary.words->includes(w))
+
+context Game::initialiseBoard()
+    pre ValidInput: self.status = #Created and self.dictionary.words->notEmpty() and
+        self.solvingDirection.isDefined() and self.solvingUnits.isDefined()
+    post ExpectedOutcome: self.status = #FullyInitialised and self.boardReady() and
+        self.gameCells->forAll(c | c.oclIsNew()) and
+        self.gameUnits->forAll(u | u.oclIsNew()) and
+        self.plays->isEmpty() and self.players = self.players@pre
+
+context Game::removePlayers()
+    pre ValidInput: self.rosterOpen() and self.players->notEmpty()
+    post ExpectedOutcome: self.players->isEmpty() and Player.allInstances = Player.allInstances@pre
+
+context Game::updateStatus(status : GameStatus) : Boolean
+    pre ValidInput: status.isDefined()
+    post ExpectedOutcome: result = self.canChangeStatus@pre(status) and
+        self.status = (if result then status else self.status@pre endif) and
+        self.plays = self.plays@pre and self.players = self.players@pre and
+        self.gameCells = self.gameCells@pre and self.gameUnits = self.gameUnits@pre and
+        self.winner = self.winner@pre
+
+context Player::play(gameID : Integer, row : Integer, column : Integer, value : Letter)
+    pre ValidInput: self.games->exists(g | g.id = gameID and g.canPlayAt(row, column, value) and
+        (if g.plays->isEmpty() then true else g.plays->last().player <> self endif))
+    post ExpectedOutcome: let g : Game = self.games->any(x | x.id = gameID) in
+        g.plays = g.plays@pre->append(g.plays->last()) and
+        g.plays->last().oclIsNew() and g.plays->last().player = self and
+        g.plays->last().playValue = value and g.plays->last().cell = g.cellAt(row, column) and
+        g.cellAt(row, column).valueInCell = value and
+        self.plays = self.plays@pre->append(g.plays->last()) and
+        g.gameCells = g.gameCells@pre and
+        g.gameCells->excluding(g.cellAt(row, column))->forAll(c |
+            c.valueInCell = c.valueInCell@pre) and
+        (if g.hasWinningWord() then g.status = #Completed
+         else if g.hasPotentialWord() then g.status = #Started
+         else g.status = #StaleMated endif endif)
+
+context Play::updateValue(value : Letter)
+    pre ValidInput: value.isDefined() and value = self.playValue
+    post ExpectedOutcome: self.playValue = value and self.cell = self.cell@pre and
+        self.game = self.game@pre and self.player = self.player@pre and
+        self.cell.valueInCell = (self.cell@pre).valueInCell@pre

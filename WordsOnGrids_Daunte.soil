@@ -1,0 +1,256 @@
+-- Contract tests for WordsOnGrid, Game, Player and Play.
+-- Open WordsOnGrids_Daunte.use in USE.
+-- In the USE shell, run: open WordsOnGrids_Daunte.soil
+-- Run in a fresh model session. The script adds fixture objects.
+-- The script uses openter/opexit to test contracts with explicit state changes.
+-- The final command intentionally fails the turn precondition.
+-- Board, dictionary, word and letters are fixture data.
+
+-- Register two players and test the addPlayer contract.
+!create demoSystem : WordsOnGrid
+!openter demoSystem addPlayer('Daunte')
+!create daunte : Player
+!set daunte.username := 'Daunte'
+!insert (demoSystem, daunte) into RegisteredPlayers
+!opexit true
+
+!openter demoSystem addPlayer('Alex')
+!create alex : Player
+!set alex.username := 'Alex'
+!insert (demoSystem, alex) into RegisteredPlayers
+!opexit true
+
+-- WordsOnGrid: duplicate registration should return false.
+!openter demoSystem addPlayer('Daunte')
+!opexit false
+
+-- Set up a 5 by 5 game with rows enabled and one dictionary word.
+-- These links build the dictionary fixture directly.
+!create demoGame : Game
+!set demoGame.id := 1
+!set demoGame.sizeOfWords := 5
+!set demoGame.solvingDirection := #TopToBottom
+!set demoGame.solvingUnits := #Rows
+!set demoGame.status := #Created
+!insert (demoSystem, demoGame) into Games
+
+!create demoDictionary : Dictionary
+!set demoDictionary.searchOption := #TopToBottom
+!insert (demoDictionary, demoGame) into GameDictionary
+!create crane : Word
+!insert (demoDictionary, crane) into DictionaryWords
+
+!create letter_c : Letter
+!set letter_c.value := 'c'
+!insert (crane, letter_c) into WordValue
+!insert (demoGame, letter_c) into GameAlphabet
+
+!create letter_r : Letter
+!set letter_r.value := 'r'
+!insert (crane, letter_r) into WordValue
+!insert (demoGame, letter_r) into GameAlphabet
+
+!create letter_a : Letter
+!set letter_a.value := 'a'
+!insert (crane, letter_a) into WordValue
+!insert (demoGame, letter_a) into GameAlphabet
+
+!create letter_n : Letter
+!set letter_n.value := 'n'
+!insert (crane, letter_n) into WordValue
+!insert (demoGame, letter_n) into GameAlphabet
+
+!create letter_e : Letter
+!set letter_e.value := 'e'
+!insert (crane, letter_e) into WordValue
+!insert (demoGame, letter_e) into GameAlphabet
+
+!openter demoGame addPlayers(Set{daunte, alex})
+!insert (demoGame, daunte) into GamePlayers
+!insert (demoGame, alex) into GamePlayers
+!opexit
+
+-- Initialise the board. Insert each row's cells in column order.
+!openter demoGame initialiseBoard()
+!create row1 : Row
+!set row1.index := 1
+!insert (demoGame, row1) into GameUnits
+!create cell11 : Cell
+!set cell11.row := 1
+!set cell11.column := 1
+!insert (demoGame, cell11) into GameCells
+!insert (cell11, row1) into LinkedCells
+!create cell12 : Cell
+!set cell12.row := 1
+!set cell12.column := 2
+!insert (demoGame, cell12) into GameCells
+!insert (cell12, row1) into LinkedCells
+!create cell13 : Cell
+!set cell13.row := 1
+!set cell13.column := 3
+!insert (demoGame, cell13) into GameCells
+!insert (cell13, row1) into LinkedCells
+!create cell14 : Cell
+!set cell14.row := 1
+!set cell14.column := 4
+!insert (demoGame, cell14) into GameCells
+!insert (cell14, row1) into LinkedCells
+!create cell15 : Cell
+!set cell15.row := 1
+!set cell15.column := 5
+!insert (demoGame, cell15) into GameCells
+!insert (cell15, row1) into LinkedCells
+
+!create row2 : Row
+!set row2.index := 2
+!insert (demoGame, row2) into GameUnits
+!create cell21 : Cell
+!set cell21.row := 2
+!set cell21.column := 1
+!insert (demoGame, cell21) into GameCells
+!insert (cell21, row2) into LinkedCells
+!create cell22 : Cell
+!set cell22.row := 2
+!set cell22.column := 2
+!insert (demoGame, cell22) into GameCells
+!insert (cell22, row2) into LinkedCells
+!create cell23 : Cell
+!set cell23.row := 2
+!set cell23.column := 3
+!insert (demoGame, cell23) into GameCells
+!insert (cell23, row2) into LinkedCells
+!create cell24 : Cell
+!set cell24.row := 2
+!set cell24.column := 4
+!insert (demoGame, cell24) into GameCells
+!insert (cell24, row2) into LinkedCells
+!create cell25 : Cell
+!set cell25.row := 2
+!set cell25.column := 5
+!insert (demoGame, cell25) into GameCells
+!insert (cell25, row2) into LinkedCells
+
+!create row3 : Row
+!set row3.index := 3
+!insert (demoGame, row3) into GameUnits
+!create cell31 : Cell
+!set cell31.row := 3
+!set cell31.column := 1
+!insert (demoGame, cell31) into GameCells
+!insert (cell31, row3) into LinkedCells
+!create cell32 : Cell
+!set cell32.row := 3
+!set cell32.column := 2
+!insert (demoGame, cell32) into GameCells
+!insert (cell32, row3) into LinkedCells
+!create cell33 : Cell
+!set cell33.row := 3
+!set cell33.column := 3
+!insert (demoGame, cell33) into GameCells
+!insert (cell33, row3) into LinkedCells
+!create cell34 : Cell
+!set cell34.row := 3
+!set cell34.column := 4
+!insert (demoGame, cell34) into GameCells
+!insert (cell34, row3) into LinkedCells
+!create cell35 : Cell
+!set cell35.row := 3
+!set cell35.column := 5
+!insert (demoGame, cell35) into GameCells
+!insert (cell35, row3) into LinkedCells
+
+!create row4 : Row
+!set row4.index := 4
+!insert (demoGame, row4) into GameUnits
+!create cell41 : Cell
+!set cell41.row := 4
+!set cell41.column := 1
+!insert (demoGame, cell41) into GameCells
+!insert (cell41, row4) into LinkedCells
+!create cell42 : Cell
+!set cell42.row := 4
+!set cell42.column := 2
+!insert (demoGame, cell42) into GameCells
+!insert (cell42, row4) into LinkedCells
+!create cell43 : Cell
+!set cell43.row := 4
+!set cell43.column := 3
+!insert (demoGame, cell43) into GameCells
+!insert (cell43, row4) into LinkedCells
+!create cell44 : Cell
+!set cell44.row := 4
+!set cell44.column := 4
+!insert (demoGame, cell44) into GameCells
+!insert (cell44, row4) into LinkedCells
+!create cell45 : Cell
+!set cell45.row := 4
+!set cell45.column := 5
+!insert (demoGame, cell45) into GameCells
+!insert (cell45, row4) into LinkedCells
+
+!create row5 : Row
+!set row5.index := 5
+!insert (demoGame, row5) into GameUnits
+!create cell51 : Cell
+!set cell51.row := 5
+!set cell51.column := 1
+!insert (demoGame, cell51) into GameCells
+!insert (cell51, row5) into LinkedCells
+!create cell52 : Cell
+!set cell52.row := 5
+!set cell52.column := 2
+!insert (demoGame, cell52) into GameCells
+!insert (cell52, row5) into LinkedCells
+!create cell53 : Cell
+!set cell53.row := 5
+!set cell53.column := 3
+!insert (demoGame, cell53) into GameCells
+!insert (cell53, row5) into LinkedCells
+!create cell54 : Cell
+!set cell54.row := 5
+!set cell54.column := 4
+!insert (demoGame, cell54) into GameCells
+!insert (cell54, row5) into LinkedCells
+!create cell55 : Cell
+!set cell55.row := 5
+!set cell55.column := 5
+!insert (demoGame, cell55) into GameCells
+!insert (cell55, row5) into LinkedCells
+!set demoGame.status := #FullyInitialised
+!opexit
+check
+
+!openter demoGame updateStatus(#Started)
+!set demoGame.status := #Started
+!opexit true
+check
+
+-- Legal first move. Daunte places 'c' in row 1, column 1.
+!openter daunte play(1, 1, 1, letter_c)
+!create firstMove : Play
+!insert (demoGame, firstMove) into GamePlay
+!insert (daunte, firstMove) into WhoPlayed
+!insert (cell11, firstMove) into CellPlay
+!insert (letter_c, firstMove) into PlayValue
+!insert (cell11, letter_c) into CellValue
+!opexit
+check
+
+-- Play: passing the recorded letter preserves the move.
+!openter firstMove updateValue(letter_c)
+!opexit
+
+-- Expected: Started, one move by Daunte, and 'c' in the first cell.
+? demoGame.status
+? demoGame.plays->size()
+? demoGame.plays->last().player.username
+? demoGame.plays->last().playValue = letter_c
+
+-- The target cell and letter are valid, so the failure isolates whose turn it is.
+-- Expected: canPlayAt returns true, then Player::play rejects Daunte's second turn.
+? demoGame.canPlayAt(1, 2, letter_r)
+!openter daunte play(1, 1, 2, letter_r)
+
+-- Optional separate negative test in the USE shell after the script ends.
+-- Enter the next command without its comment marker. Expect ValidInput to fail.
+-- !openter firstMove updateValue(letter_r)
