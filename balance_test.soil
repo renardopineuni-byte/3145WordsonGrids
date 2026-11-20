@@ -32,4 +32,6 @@ reset
 !for w in Sequence{'ant','bat','cat','dog','eel','fox','gnu','hen'} do big.add(w); end
 ?big.root.value.getValue()
 ?big.root.getBalanceFactor()
-check
+
+?big.searchForPattern('_at')
+?big.searchForPrefix('ee')

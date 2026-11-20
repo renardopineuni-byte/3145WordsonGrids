@@ -1,0 +1,424 @@
+model WordsOnGrids
+
+/* ------------------------------------------------------------------ */
+/* DATATYPES                                                          */
+/* ------------------------------------------------------------------ */
+
+
+dataType Character
+operations
+    Character(character : String)
+end
+
+/* ------------------------------------------------------------------ */
+/* ENUMERATIONs                                                       */
+/* ------------------------------------------------------------------ */
+
+enum GameStatus {
+    Abandoned,
+    Created,
+    FullyInitialised,
+    Completed,
+    Started,
+    StaleMated,
+    Paused
+}
+
+enum SolveOnUnits {
+    Columns,
+    Rows,
+    Diagonals,
+    RowsAndColumns,
+    All
+}
+
+enum SolvingDirection {
+    TopToBottom,
+    BottomToTop,
+    Both
+}
+
+enum DiagonalDirection {
+    Main,
+    Other
+}
+
+/* ------------------------------------------------------------------ */
+/* CLASSes: top level                                                 */
+/* ------------------------------------------------------------------ */
+
+class WordsOnGrid
+operations
+    addGame(sizeOfWords : Integer, dictionary : Set(String))
+    addPlayer(username : String) : Boolean
+    addPlayerToGame(player : String, gameId : Integer)
+    removeGame(id : Integer)
+    removePlayer(username : String)
+    removePlayerFromGame(player : String, gameId : Integer)
+end
+
+class Player
+attributes
+    username : String
+operations
+    play(gameID : Integer, row : Integer, column : Integer, value : Letter)
+end
+
+class Game
+attributes
+    id : Integer
+    sizeOfWords : Integer
+    solvingDirection : SolvingDirection
+    solvingUnits : SolveOnUnits
+    status : GameStatus
+operations
+    addDictionary(words : Set(String))
+    addPlay(row : Integer, column : Integer, value : Letter)
+    addPlayers(players : Set(Player))
+    findWordWithPrefix(prefix : String) : Set(Word)
+    findWordWithPattern(wordPattern : String) : Set(Word)
+    initialiseBoard()
+    removePlayers()
+    updateStatus(status : GameStatus) : Boolean
+end
+
+class Play
+operations
+    updateValue(value : Letter)
+end
+
+/* ------------------------------------------------------------------ */
+/* CLASSes: grid and solvable units                                   */
+/* ------------------------------------------------------------------ */
+
+class Cell
+attributes
+    row : Integer
+    column : Integer
+operations
+    updateValue(value : Letter)
+end
+
+abstract class SolvableUnit
+operations
+    getValue() : String
+    updateCellValue(letter : Letter, row : Integer, column : Integer) : Boolean
+    add(cell : Cell) : Boolean
+end
+
+abstract class IndexedSolvableUnit < SolvableUnit
+attributes
+    index : Integer
+end
+
+class Row < IndexedSolvableUnit
+end
+
+class Column < IndexedSolvableUnit
+end
+
+class Diagonal < SolvableUnit
+attributes
+    direction : DiagonalDirection
+end
+
+/* ------------------------------------------------------------------ */
+/* CLASSes: words, letters and dictionary                             */
+/* ------------------------------------------------------------------ */
+
+abstract class NodeValue
+operations
+    getValue() : String = 'not implemented'
+end
+
+class Letter
+attributes
+    value : Character
+operations
+    getValue() : String = value.character
+end
+
+class Word < NodeValue
+operations
+    initialise(text : String)
+    begin
+        declare l : Letter;
+        for c in text.characters() do
+            l := new Letter();
+            l.value := Character(c);
+            insert (self, l) into WordValue;
+        end;
+    end
+    pre emptyWord: wordValue->isEmpty()
+    pre longEnough: text.size() >= 3
+    post oneLetterPerChar: wordValue->size() = text.size()
+    post spellsText: getValue() = text
+    post freshLetters: wordValue->forAll(l | l.oclIsNew())
+    post ownedOnlyByThisWord: wordValue->forAll(l | l.wordsWithLetters = self)
+
+    getValue() : String =
+        wordValue->iterate(l : Letter; acc : String = '' | acc.concat(l.getValue()))
+    reverseWord() : String =
+        wordValue->reverse()->iterate(l : Letter; acc : String = '' | acc.concat(l.getValue()))
+    matchesPattern(pattern : String) : Boolean 
+    matchesPatternInReverse(pattern : String) : Boolean
+end
+
+class Dictionary
+attributes
+    searchOption : SolvingDirection
+operations
+    addWord(word : String) : Boolean
+    findWord(word : String) : Boolean
+    findPotentialWord(wordPrefix : String) : Set(Word)
+    findWordWithPattern(wordPattern : String) : Set(Word)
+    getWords() : OrderedSet(Word)
+    removeWord(word : String) : Boolean
+end
+
+/* ------------------------------------------------------------------ */
+/* CLASSes: dictionary implementation (Bridge), AVL only              */
+/* ------------------------------------------------------------------ */
+
+abstract class CollectionImpl
+operations
+    add(value : String)
+    remove(value : String)
+    contains(value : String) : Boolean
+    getWords() : OrderedSet(Word)
+    searchForPrefix(value : String) : Set(String)
+    searchForPattern(value : String) : Set(String)
+end
+
+abstract class Tree < CollectionImpl
+end
+
+abstract class BinaryTree < Tree
+operations
+    inOrder() : OrderedSet(Word)
+end
+
+abstract class BinarySearchTree < BinaryTree
+operations
+    getNodes() : Set(TreeNode) =
+    Set{root}->closure(children)->including(root)    
+
+    /*returns the node a new node should be the child of*/
+    findInsertionSlot(word : String) : TreeNode
+    begin
+        declare current : TreeNode, next : TreeNode, done : Boolean;
+        current := self.root;
+        done := false;
+        while done = false do
+            if word < current.value.getValue()
+            then next := current.leftChild();
+            else next := current.rightChild();
+            end;
+            if next.isUndefined()
+            then done := true;
+            else current := next;
+            end;
+        end;
+
+        result := current;
+    end
+    pre rootExists: root->notEmpty()
+    post inTree: getNodes() -> includes(result)
+    post treeUnchanged: nodes = nodes@pre
+    post slotIsEmpty:
+        if word < result.value.getValue()
+        then result.leftChild().isUndefined()
+        else result.rightChild().isUndefined()
+        endif
+end
+
+abstract class BalancedBinaryTree < BinarySearchTree
+end
+
+class AVLTree < BalancedBinaryTree
+operations
+    add(value: String) 
+    begin
+        declare tn : TreeNode;
+        tn := new TreeNode();
+
+        if self.root = null
+            then insert(self, tn) into TreeRoot;
+                tn.initialise(value)
+            else declare parent : TreeNode; 
+                parent := self.findInsertionSlot(value);
+                insert (parent, tn) into Children;
+                tn.initialise(value)
+
+        end;
+    end
+end
+
+abstract class Node
+end
+
+class TreeNode < Node
+attributes
+operations
+    initialise(word : String)
+    begin
+        declare wd : Word;
+        wd := new Word();
+        wd.initialise(word);
+        insert (self, wd) into Value;
+    end
+    pre noValueYet: value.isUndefined()
+    post holdsWord: value.getValue() = word
+
+    leftChild() : TreeNode =
+        children->select(c | c.value.getValue() < self.value.getValue())->any(true)
+
+    rightChild() : TreeNode =
+        children->select(c | c.value.getValue() >= self.value.getValue())->any(true)
+
+    height() : Integer =
+        if children->isEmpty()
+        then 1
+        else 1 + children->collect(c | c.height())->max()
+        endif
+
+    leftHeight() : Integer =
+        if leftChild().isUndefined() then 0 else leftChild().height() endif
+
+    rightHeight() : Integer =
+        if rightChild().isUndefined() then 0 else rightChild().height() endif
+
+    getBalanceFactor() : Integer = leftHeight() - rightHeight()
+
+    constraints
+    inv atMostTwoChildren: children->size() <= 2
+    inv oneLeftOneRight:
+        children->select(c | c.value.getValue() < self.value.getValue())->size() <= 1 and
+        children->select(c | c.value.getValue() >= self.value.getValue())->size() <= 1
+end
+
+/* ------------------------------------------------------------------ */
+/* ASSOCIATIONs                                                       */
+/* ------------------------------------------------------------------ */
+
+/* WordsOnGrid */
+
+composition Games between
+    WordsOnGrid[1] role wordsOnGrid
+    Game[*] role games
+end
+
+composition RegisteredPlayers between
+    WordsOnGrid[1] role wordsOnGrid
+    Player[*] role players
+end
+
+/* Game */
+
+aggregation GameCells between
+    Game[1] role game
+    Cell[9..*] role gameCells ordered
+end
+
+composition GameUnits between
+    Game[1] role game
+    SolvableUnit[6..*] role gameUnits
+end
+
+aggregation GamePlay between
+    Game[1] role game
+    Play[*] role plays ordered
+end
+
+association GamePlayers between
+    Game[*] role games
+    Player[2] role players
+end
+
+association GameWinner between          -- derived (/winner) on the diagram
+    Game[*] role gamesWon
+    Player[0..1] role winner
+end
+
+aggregation GameDictionary between
+    Dictionary[1] role dictionary
+    Game[1..*] role games
+end
+
+aggregation GameAlphabet between        -- derived (/alphabetForWords) on the diagram
+    Game[1..*] role alphabetForGame
+    Letter[*] role alphabetForWords
+end
+
+/* Play, Cell and Letter */
+
+association CellPlay between
+    Cell[1] role cell
+    Play[1..2] role play
+end
+
+association CellValue between
+    Cell[*] role valueForCell
+    Letter[0..1] role valueInCell
+end
+
+association PlayValue between
+    Letter[1] role playValue
+    Play[*] role play
+end
+
+aggregation WhoPlayed between
+    Player[1] role player
+    Play[*] role plays ordered
+end
+
+/* Solvable units */
+
+aggregation LinkedCells between         -- suCells is derived (/suCells) on the diagram
+    Cell[3..*] role suCells ordered
+    SolvableUnit[2..4] role belongsTo
+end
+
+association PotentialWords between      -- derived (/potentialWords) on the diagram
+    Word[*] role potentialWords
+    SolvableUnit[*] role potentialFor
+end
+
+/* Words and dictionary */
+
+association DictionaryWords between     -- derived (/words) on the diagram
+    Dictionary[1] role dictionary
+    Word[*] role words ordered
+end
+
+aggregation WordValue between
+    Word[0..1] role wordsWithLetters
+    Letter[3..*] role wordValue ordered
+end
+
+aggregation ImplementedWith between
+    BinarySearchTree[1] role implementation
+    Dictionary[1..*] role dictionary
+end
+
+/* Tree structure */
+
+composition Nodes between
+    CollectionImpl[0..1] role collection union
+    Node[*] role nodes ordered union
+end
+
+composition  TreeRoot between
+    Tree[0..1] role tree subsets collection redefines collection
+    TreeNode[0..1] role root subsets nodes redefines nodes
+end
+
+composition Children between
+    TreeNode[0..1] role parent
+    TreeNode[*] role children ordered
+end
+
+aggregation Value between
+    Node[1..*] role node
+    NodeValue[1] role value
+end
