@@ -36,7 +36,39 @@ enum DiagonalDirection {
 class WordsOnGrid
 operations
     addGame(sizeOfWords : Integer, dictionary : Set(String))
+    begin
+        declare game : Game, gameDictionary : Dictionary, word : Word, letter : Letter;
+        game := new Game();
+        game.id := if self.games->isEmpty() then 1
+            else self.games->collect(g | g.id)->max() + 1 endif;
+        game.sizeOfWords := sizeOfWords;
+        game.solvingDirection := #TopToBottom;
+        game.solvingUnits := #Rows;
+        game.status := #Created;
+        insert (self, game) into Games;
+        gameDictionary := new Dictionary();
+        gameDictionary.searchOption := game.solvingDirection;
+        insert (gameDictionary, game) into GameDictionary;
+        for spelling in dictionary->asSequence() do
+            word := new Word();
+            insert (gameDictionary, word) into DictionaryWords;
+            for position in Sequence{1..spelling.size()} do
+                letter := new Letter();
+                letter.value := spelling.substring(position, position);
+                insert (word, letter) into WordValue;
+            end;
+        end;
+    end
     addPlayer(username : String) : Boolean
+    begin
+        declare registered : Player;
+        result := not self.players->exists(p | p.username = username);
+        if result then
+            registered := new Player();
+            registered.username := username;
+            insert (self, registered) into RegisteredPlayers;
+        end;
+    end
     addPlayerToGame(player : String, gameId : Integer)
     removeGame(id : Integer)
     removePlayer(username : String)
@@ -61,11 +93,81 @@ operations
     addDictionary(words : Set(String))
     addPlay(row : Integer, column : Integer, value : Letter)
     addPlayers(players : Set(Player))
+    begin
+        for participant in players->asSequence() do
+            insert (self, participant) into GamePlayers;
+        end;
+    end
     findWordWithPrefix(prefix : String) : Set(Word)
     findWordWithPattern(wordPattern : String) : Set(Word)
-    initialiseBoard()
+    initialiseBoard(layout : Sequence(String))
+    begin
+        declare cell : Cell, setup : Play, letter : Letter, token : String;
+        declare rowUnit : Row, columnUnit : Column, diagonal : Diagonal;
+        for rowNumber in Sequence{1..self.sizeOfWords} do
+            for columnNumber in Sequence{1..self.sizeOfWords} do
+                cell := new Cell();
+                cell.row := rowNumber;
+                cell.column := columnNumber;
+                insert (self, cell) into GameCells;
+                setup := new Play();
+                insert (cell, setup) into CellPlay;
+                token := layout->at((rowNumber - 1) * self.sizeOfWords + columnNumber);
+                if token <> '-' then
+                    letter := self.alphabetForWords()->any(l | l.getValue() = token);
+                    insert (letter, setup) into PlayValue;
+                    insert (cell, letter) into CellValue;
+                end;
+            end;
+        end;
+        if self.usesRows() then
+            for rowNumber in Sequence{1..self.sizeOfWords} do
+                rowUnit := new Row();
+                rowUnit.index := rowNumber;
+                insert (self, rowUnit) into GameUnits;
+                for columnNumber in Sequence{1..self.sizeOfWords} do
+                    cell := self.cellAt(rowNumber, columnNumber);
+                    insert (cell, rowUnit) into LinkedCells;
+                end;
+            end;
+        end;
+        if self.usesColumns() then
+            for columnNumber in Sequence{1..self.sizeOfWords} do
+                columnUnit := new Column();
+                columnUnit.index := columnNumber;
+                insert (self, columnUnit) into GameUnits;
+                for rowNumber in Sequence{1..self.sizeOfWords} do
+                    cell := self.cellAt(rowNumber, columnNumber);
+                    insert (cell, columnUnit) into LinkedCells;
+                end;
+            end;
+        end;
+        if self.usesDiagonals() then
+            diagonal := new Diagonal();
+            diagonal.direction := #Main;
+            insert (self, diagonal) into GameUnits;
+            for index in Sequence{1..self.sizeOfWords} do
+                cell := self.cellAt(index, index);
+                insert (cell, diagonal) into LinkedCells;
+            end;
+            diagonal := new Diagonal();
+            diagonal.direction := #Other;
+            insert (self, diagonal) into GameUnits;
+            for index in Sequence{1..self.sizeOfWords} do
+                cell := self.cellAt(index, self.sizeOfWords + 1 - index);
+                insert (cell, diagonal) into LinkedCells;
+            end;
+        end;
+        self.status := #FullyInitialised;
+    end
     removePlayers()
     updateStatus(status : GameStatus) : Boolean
+    begin
+        result := self.canChangeStatus(status);
+        if result then
+            self.status := status;
+        end;
+    end
 
     -- Queries used by the contracts.
     rosterOpen() : Boolean =
@@ -117,10 +219,16 @@ operations
             else false endif)
         else true endif)
 
+    -- The alphabet is derived from dictionary words whenever it is queried.
+    alphabetForWords() : Set(Letter) =
+        self.dictionary.words->iterate(w : Word; letters : Set(Letter) = Set{} |
+            letters->union(w.wordValue->asSet()))
+
     canPlayAt(row : Integer, column : Integer, value : Letter) : Boolean =
         self.status = #Started and self.players->size() = 2 and value.isDefined() and
-        self.alphabetForWords->includes(value) and
+        self.alphabetForWords()->includes(value) and
         self.gameCells->exists(c | c.row = row and c.column = column and
+            c.play->size() = 1 and c.play->first().playValue.isUndefined() and
             c.valueInCell.isUndefined())
 
     unitMatches(unit : SolvableUnit, word : Word, backwards : Boolean) : Boolean =
@@ -256,8 +364,9 @@ composition GameUnits between
     SolvableUnit[*] role gameUnits
 end
 
+-- GamePlay and WhoPlayed only record player turns. Setup plays link to cells.
 aggregation GamePlay between
-    Game[1] role game
+    Game[0..1] role game
     Play[*] role plays ordered
 end
 
@@ -276,14 +385,9 @@ aggregation GameDictionary between
     Game[*] role games
 end
 
-aggregation GameAlphabet between
-    Game[1..*] role alphabetForGame
-    Letter[*] role alphabetForWords
-end
-
 association CellPlay between
     Cell[1] role cell
-    Play[0..1] role play
+    Play[1..2] role play ordered
 end
 
 association CellValue between
@@ -292,12 +396,12 @@ association CellValue between
 end
 
 association PlayValue between
-    Letter[1] role playValue
+    Letter[0..1] role playValue
     Play[*] role play
 end
 
 aggregation WhoPlayed between
-    Player[1] role player
+    Player[0..1] role player
     Play[*] role plays ordered
 end
 
@@ -333,8 +437,7 @@ context Game
     inv ValidSetup:
         self.id.isDefined() and self.sizeOfWords >= 3 and self.status.isDefined() and
         self.dictionary.words->notEmpty() and self.dictionary.words->forAll(w |
-            w.wordValue->size() = self.sizeOfWords and
-            w.wordValue->forAll(l | self.alphabetForWords->includes(l)))
+            w.wordValue->size() = self.sizeOfWords)
     inv RegisteredParticipants: self.wordsOnGrid.players->includesAll(self.players)
     inv TwoPlayersWhenPlaying:
         (Set{#Started, #Paused, #Completed, #StaleMated}->includes(self.status) or
@@ -354,7 +457,7 @@ context Game
         self.gameCells->forAll(a, b | a = b or a.row <> b.row or a.column <> b.column)
     inv BoardUsesAllowedLetters:
         self.gameCells->forAll(c | c.valueInCell.isUndefined() or
-            self.alphabetForWords->includes(c.valueInCell))
+            self.alphabetForWords()->includes(c.valueInCell))
     inv AlternatingTurns:
         if self.plays->size() < 2 then true else
             Sequence{2..self.plays->size()}->forAll(i |
@@ -372,10 +475,20 @@ context Game
             (self.hasPotentialWord() and not self.hasWinningWord())
 
 context Play
-    inv BelongsToGameParticipant: self.game.players->includes(self.player)
-    inv CellBelongsToGame: self.cell.game = self.game
-    inv AllowedLetter: self.game.alphabetForWords->includes(self.playValue)
-    inv CellShowsPlayedLetter: self.cell.valueInCell = self.playValue
+    inv SetupOrPlayerTurn:
+        if self.game.isUndefined() then
+            self.player.isUndefined() and self.cell.play->first() = self
+        else
+            self.player.isDefined() and self.game.players->includes(self.player) and
+            self.cell.game = self.game and self.playValue.isDefined() and
+            self.cell.play->size() = 2 and self.cell.play->last() = self and
+            self.cell.play->first().playValue.isUndefined()
+        endif
+    inv AllowedLetter:
+        self.playValue.isUndefined() or
+        self.cell.game.alphabetForWords()->includes(self.playValue)
+    inv CellShowsLatestPlay:
+        self.cell.valueInCell = self.cell.play->last().playValue
 
 context WordsOnGrid::addGame(sizeOfWords : Integer, dictionary : Set(String))
     pre ValidInput: sizeOfWords >= 3 and dictionary->notEmpty() and
@@ -415,7 +528,8 @@ context WordsOnGrid::removeGame(id : Integer)
         let deleted : Game = self.games@pre->any(g | g.id@pre = id) in
         self.games = self.games@pre->excluding(deleted) and self.players = self.players@pre and
         Game.allInstances = Game.allInstances@pre->excluding(deleted) and
-        Play.allInstances = Play.allInstances@pre - deleted.plays@pre->asSet() and
+        Play.allInstances = Play.allInstances@pre->reject(p |
+            deleted.gameCells@pre->includes(p.cell@pre)) and
         Cell.allInstances = Cell.allInstances@pre - deleted.gameCells@pre->asSet() and
         SolvableUnit.allInstances = SolvableUnit.allInstances@pre - deleted.gameUnits@pre
 
@@ -447,6 +561,10 @@ context Game::addPlay(row : Integer, column : Integer, value : Letter)
     self.plays->last().oclIsNew() and self.plays->last().playValue = value and
     self.plays->last().cell = self.cellAt(row, column) and
     self.cellAt(row, column).valueInCell = value and
+    self.cellAt(row, column).play->size() = 2 and
+    self.cellAt(row, column).play->last() = self.plays->last() and
+    self.cellAt(row, column).play->first() =
+        self.cellAt@pre(row, column).play@pre->first() and
     self.gameCells = self.gameCells@pre and
     self.gameCells->excluding(self.cellAt(row, column))->forAll(c |
         c.valueInCell = c.valueInCell@pre) and self.players = self.players@pre and
@@ -471,11 +589,24 @@ context Game::findWordWithPattern(wordPattern : String) : Set(Word)
     post ExpectedOutcome: result = self.dictionary.findWordWithPattern(wordPattern) and
         result->forAll(w | self.dictionary.words->includes(w))
 
-context Game::initialiseBoard()
+context Game::initialiseBoard(layout : Sequence(String))
+    -- The layout is in row-major order. A dash means an empty cell.
     pre ValidInput: self.status = #Created and self.dictionary.words->notEmpty() and
-        self.solvingDirection.isDefined() and self.solvingUnits.isDefined()
+        self.solvingDirection.isDefined() and self.solvingUnits.isDefined() and
+        layout->size() = self.sizeOfWords * self.sizeOfWords and
+        layout->forAll(token | token = '-' or
+            self.alphabetForWords()->exists(l | l.getValue() = token))
     post ExpectedOutcome: self.status = #FullyInitialised and self.boardReady() and
-        self.gameCells->forAll(c | c.oclIsNew()) and
+        self.gameCells->forAll(c |
+            let position : Integer = (c.row - 1) * self.sizeOfWords + c.column in
+            let token : String = layout->at(position) in
+                c.oclIsNew() and c.play->size() = 1 and
+                c.play->first().oclIsNew() and c.play->first().game.isUndefined() and
+                c.play->first().player.isUndefined() and
+                c.valueInCell = c.play->first().playValue and
+                (if token = '-' then c.valueInCell.isUndefined()
+                 else c.valueInCell.getValue() = token and
+                    self.alphabetForWords()->includes(c.valueInCell) endif)) and
         self.gameUnits->forAll(u | u.oclIsNew()) and
         self.plays->isEmpty() and self.players = self.players@pre
 
@@ -499,6 +630,10 @@ context Player::play(gameID : Integer, row : Integer, column : Integer, value : 
         g.plays->last().oclIsNew() and g.plays->last().player = self and
         g.plays->last().playValue = value and g.plays->last().cell = g.cellAt(row, column) and
         g.cellAt(row, column).valueInCell = value and
+        g.cellAt(row, column).play->size() = 2 and
+        g.cellAt(row, column).play->last() = g.plays->last() and
+        g.cellAt(row, column).play->first() =
+            g.cellAt@pre(row, column).play@pre->first() and
         self.plays = self.plays@pre->append(g.plays->last()) and
         g.gameCells = g.gameCells@pre and
         g.gameCells->excluding(g.cellAt(row, column))->forAll(c |
