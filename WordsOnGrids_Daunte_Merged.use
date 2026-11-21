@@ -1,0 +1,985 @@
+model WordsOnGrids
+
+/* ------------------------------------------------------------------ */
+/* DATATYPES                                                          */
+/* ------------------------------------------------------------------ */
+
+
+dataType Character
+operations
+    Character(character : String)
+end
+
+/* ------------------------------------------------------------------ */
+/* ENUMERATIONs                                                       */
+/* ------------------------------------------------------------------ */
+
+enum GameStatus {
+    Abandoned,
+    Created,
+    FullyInitialised,
+    Completed,
+    Started,
+    StaleMated,
+    Paused
+}
+
+enum SolveOnUnits {
+    Columns,
+    Rows,
+    Diagonals,
+    RowsAndColumns,
+    All
+}
+
+enum SolvingDirection {
+    TopToBottom,
+    BottomToTop,
+    Both
+}
+
+enum DiagonalDirection {
+    Main,
+    Other
+}
+
+/* ------------------------------------------------------------------ */
+/* CLASSes: top level                                                 */
+/* ------------------------------------------------------------------ */
+
+class WordsOnGrid
+operations
+    addGame(sizeOfWords : Integer, dictionary : Set(String))
+    begin
+        declare game : Game, gameDictionary : Dictionary, tree : AVLTree;
+        game := new Game();
+        game.id := if self.games->isEmpty() then 1
+            else self.games->collect(g | g.id)->max() + 1 endif;
+        game.sizeOfWords := sizeOfWords;
+        game.solvingDirection := #TopToBottom;
+        game.solvingUnits := #Rows;
+        game.status := #Created;
+        insert (self, game) into Games;
+        gameDictionary := new Dictionary();
+        gameDictionary.searchOption := game.solvingDirection;
+        insert (gameDictionary, game) into GameDictionary;
+        tree := new AVLTree();
+        insert (tree, gameDictionary) into ImplementedWith;
+        game.addDictionary(dictionary);
+    end
+    addPlayer(username : String) : Boolean
+    begin
+        declare registered : Player;
+        result := not self.players->exists(p | p.username = username);
+        if result then
+            registered := new Player();
+            registered.username := username;
+            insert (self, registered) into RegisteredPlayers;
+        end;
+    end
+    addPlayerToGame(player : String, gameId : Integer)
+    removeGame(id : Integer)
+    removePlayer(username : String)
+    removePlayerFromGame(player : String, gameId : Integer)
+end
+
+class Player
+attributes
+    username : String
+operations
+    play(gameID : Integer, row : Integer, column : Integer, value : Letter)
+end
+
+class Game
+attributes
+    id : Integer
+    sizeOfWords : Integer
+    solvingDirection : SolvingDirection
+    solvingUnits : SolveOnUnits
+    status : GameStatus
+operations
+    addDictionary(words : Set(String))
+    begin
+        declare tree : AVLTree, node : TreeNode;
+        tree := self.dictionary.implementation.oclAsType(AVLTree);
+        for spelling in words->asSequence() do
+            if not self.dictionary.words->exists(w | w.getValue() = spelling) then
+                tree.add(spelling);
+                node := tree.getNodes()->any(n | n.value.getValue() = spelling);
+                insert (self.dictionary, node.value.oclAsType(Word)) into DictionaryWords;
+            end;
+        end;
+    end
+    addPlay(row : Integer, column : Integer, value : Letter)
+    addPlayers(players : Set(Player))
+    begin
+        for participant in players->asSequence() do
+            insert (self, participant) into GamePlayers;
+        end;
+    end
+    findWordWithPrefix(prefix : String) : Set(Word)
+    findWordWithPattern(wordPattern : String) : Set(Word)
+    initialiseBoard(layout : Sequence(String))
+    begin
+        declare cell : Cell, setup : Play, letter : Letter, token : String,
+            rowUnit : Row, columnUnit : Column, diagonal : Diagonal;
+        for rowNumber in Sequence{1..self.sizeOfWords} do
+            for columnNumber in Sequence{1..self.sizeOfWords} do
+                cell := new Cell();
+                cell.row := rowNumber;
+                cell.column := columnNumber;
+                insert (self, cell) into GameCells;
+                setup := new Play();
+                insert (cell, setup) into CellPlay;
+                token := layout->at((rowNumber - 1) * self.sizeOfWords + columnNumber);
+                if token <> '-' then
+                    letter := self.alphabetForWords()->any(l | l.getValue() = token);
+                    insert (letter, setup) into PlayValue;
+                    insert (cell, letter) into CellValue;
+                end;
+            end;
+        end;
+        if self.usesRows() then
+            for rowNumber in Sequence{1..self.sizeOfWords} do
+                rowUnit := new Row();
+                rowUnit.index := rowNumber;
+                insert (self, rowUnit) into GameUnits;
+                for columnNumber in Sequence{1..self.sizeOfWords} do
+                    cell := self.cellAt(rowNumber, columnNumber);
+                    insert (cell, rowUnit) into LinkedCells;
+                end;
+            end;
+        end;
+        if self.usesColumns() then
+            for columnNumber in Sequence{1..self.sizeOfWords} do
+                columnUnit := new Column();
+                columnUnit.index := columnNumber;
+                insert (self, columnUnit) into GameUnits;
+                for rowNumber in Sequence{1..self.sizeOfWords} do
+                    cell := self.cellAt(rowNumber, columnNumber);
+                    insert (cell, columnUnit) into LinkedCells;
+                end;
+            end;
+        end;
+        if self.usesDiagonals() then
+            diagonal := new Diagonal();
+            diagonal.direction := #Main;
+            insert (self, diagonal) into GameUnits;
+            for index in Sequence{1..self.sizeOfWords} do
+                cell := self.cellAt(index, index);
+                insert (cell, diagonal) into LinkedCells;
+            end;
+            diagonal := new Diagonal();
+            diagonal.direction := #Other;
+            insert (self, diagonal) into GameUnits;
+            for index in Sequence{1..self.sizeOfWords} do
+                cell := self.cellAt(index, self.sizeOfWords + 1 - index);
+                insert (cell, diagonal) into LinkedCells;
+            end;
+        end;
+        self.status := #FullyInitialised;
+    end
+    removePlayers()
+    updateStatus(status : GameStatus) : Boolean
+    begin
+        result := self.canChangeStatus(status);
+        if result then
+            self.status := status;
+        end;
+    end
+
+    -- Match a prefix or a full pattern in each enabled search direction.
+    matchesSearch(word : Word, query : String, backwards : Boolean,
+                  allowWildcard : Boolean) : Boolean =
+        let n : Integer = word.wordValue->size() in
+        if query.size() = 0 then true
+        else if query.size() > n then false
+        else
+            Sequence{1..query.size()}->forAll(i |
+                let character : String = query.substring(i, i) in
+                let position : Integer = if backwards then n + 1 - i else i endif in
+                    (allowWildcard and character = '_') or
+                    character = word.wordValue->at(position).getValue())
+        endif endif
+
+    matchingPrefix(wordPrefix : String) : Set(Word) =
+        self.dictionary.words->select(w |
+            (self.solvingDirection <> #BottomToTop and
+                self.matchesSearch(w, wordPrefix, false, false)) or
+            (self.solvingDirection <> #TopToBottom and
+                self.matchesSearch(w, wordPrefix, true, false)))->asSet()
+
+    -- An underscore matches one letter in a full-length pattern.
+    matchingPattern(wordPattern : String) : Set(Word) =
+        self.dictionary.words->select(w | w.wordValue->size() = wordPattern.size() and
+            ((self.solvingDirection <> #BottomToTop and
+                self.matchesSearch(w, wordPattern, false, true)) or
+             (self.solvingDirection <> #TopToBottom and
+                self.matchesSearch(w, wordPattern, true, true))))->asSet()
+
+    -- Queries used by the contracts.
+    rosterOpen() : Boolean =
+        self.status = #Created or self.status = #FullyInitialised
+
+    dictionaryValues() : Set(String) =
+        self.dictionary.words->collect(w | w.getValue())->asSet()
+
+    cellAt(row : Integer, column : Integer) : Cell =
+        self.gameCells->any(c | c.row = row and c.column = column)
+
+    usesRows() : Boolean =
+        Set{#Rows, #RowsAndColumns, #All}->includes(self.solvingUnits)
+
+    usesColumns() : Boolean =
+        Set{#Columns, #RowsAndColumns, #All}->includes(self.solvingUnits)
+
+    usesDiagonals() : Boolean =
+        Set{#Diagonals, #All}->includes(self.solvingUnits)
+
+    boardReady() : Boolean =
+        let n : Integer = self.sizeOfWords in
+        self.gameCells->size() = n * n and
+        self.gameUnits->size() =
+            (if self.usesRows() then n else 0 endif) +
+            (if self.usesColumns() then n else 0 endif) +
+            (if self.usesDiagonals() then 2 else 0 endif) and
+        Sequence{1..n}->forAll(i |
+            (if self.usesRows() then
+                self.gameUnits->one(u | if u.oclIsTypeOf(Row) then
+                    u.oclAsType(Row).index = i and u.suCells->size() = n and
+                    Sequence{1..n}->forAll(j | u.suCells->at(j) = self.cellAt(i, j))
+                else false endif)
+            else true endif) and
+            (if self.usesColumns() then
+                self.gameUnits->one(u | if u.oclIsTypeOf(Column) then
+                    u.oclAsType(Column).index = i and u.suCells->size() = n and
+                    Sequence{1..n}->forAll(j | u.suCells->at(j) = self.cellAt(j, i))
+                else false endif)
+            else true endif)) and
+        (if self.usesDiagonals() then
+            self.gameUnits->one(u | if u.oclIsTypeOf(Diagonal) then
+                u.oclAsType(Diagonal).direction = #Main and u.suCells->size() = n and
+                Sequence{1..n}->forAll(i | u.suCells->at(i) = self.cellAt(i, i))
+            else false endif) and
+            self.gameUnits->one(u | if u.oclIsTypeOf(Diagonal) then
+                u.oclAsType(Diagonal).direction = #Other and u.suCells->size() = n and
+                Sequence{1..n}->forAll(i | u.suCells->at(i) = self.cellAt(i, n + 1 - i))
+            else false endif)
+        else true endif)
+
+    -- The alphabet is derived from dictionary words whenever it is queried.
+    alphabetForWords() : Set(Letter) =
+        self.dictionary.words->iterate(w : Word; letters : Set(Letter) = Set{} |
+            letters->union(w.wordValue->asSet()))
+
+    canPlayAt(row : Integer, column : Integer, value : Letter) : Boolean =
+        self.status = #Started and self.players->size() = 2 and value.isDefined() and
+        self.alphabetForWords()->includes(value) and
+        self.gameCells->exists(c | c.row = row and c.column = column and
+            c.play->size() = 1 and c.play->exists(p |
+                p.game.isUndefined() and p.playValue.isUndefined()) and
+            c.valueInCell.isUndefined())
+
+    unitMatches(unit : SolvableUnit, word : Word, backwards : Boolean) : Boolean =
+        let n : Integer = self.sizeOfWords in
+        unit.suCells->size() = n and word.wordValue->size() = n and
+        Sequence{1..n}->forAll(i |
+            let letter : Letter = unit.suCells->at(i).valueInCell in
+            if letter.isUndefined() then true else
+                let j : Integer = if backwards then n + 1 - i else i endif in
+                letter.getValue() = word.wordValue->at(j).getValue()
+            endif)
+
+    unitHasPotentialWord(unit : SolvableUnit) : Boolean =
+        self.dictionary.words->exists(w |
+            (self.solvingDirection <> #BottomToTop and self.unitMatches(unit, w, false)) or
+            (self.solvingDirection <> #TopToBottom and self.unitMatches(unit, w, true)))
+
+    hasPotentialWord() : Boolean =
+        self.gameUnits->exists(u | self.unitHasPotentialWord(u))
+
+    hasWinningWord() : Boolean =
+        self.gameUnits->exists(u | u.suCells->forAll(c | c.valueInCell.isDefined())
+            and self.unitHasPotentialWord(u))
+
+    canChangeStatus(target : GameStatus) : Boolean =
+        target = self.status or
+        (target = #Started and
+            (self.status = #FullyInitialised or self.status = #Paused) and
+            self.players->size() = 2 and self.hasPotentialWord() and not self.hasWinningWord()) or
+        (target = #Paused and self.status = #Started) or
+        (target = #Abandoned and Set{#Created, #FullyInitialised, #Started, #Paused}
+            ->includes(self.status))
+end
+
+class Play
+operations
+    updateValue(value : Letter)
+end
+
+/* ------------------------------------------------------------------ */
+/* CLASSes: grid and solvable units                                   */
+/* ------------------------------------------------------------------ */
+
+class Cell
+attributes
+    row : Integer
+    column : Integer
+operations
+    updateValue(value : Letter)
+end
+
+abstract class SolvableUnit
+operations
+    getValue() : String
+    updateCellValue(letter : Letter, row : Integer, column : Integer) : Boolean
+    add(cell : Cell) : Boolean
+end
+
+abstract class IndexedSolvableUnit < SolvableUnit
+attributes
+    index : Integer
+end
+
+class Row < IndexedSolvableUnit
+end
+
+class Column < IndexedSolvableUnit
+end
+
+class Diagonal < SolvableUnit
+attributes
+    direction : DiagonalDirection
+end
+
+/* ------------------------------------------------------------------ */
+/* CLASSes: words, letters and dictionary                             */
+/* ------------------------------------------------------------------ */
+
+abstract class NodeValue
+operations
+    getValue() : String = 'not implemented'
+end
+
+class Letter
+attributes
+    value : Character
+operations
+    getValue() : String = value.character
+end
+
+class Word < NodeValue
+operations
+    initialise(text : String)
+    begin
+        declare l : Letter;
+        for c in text.characters() do
+            l := new Letter();
+            l.value := Character(c);
+            insert (self, l) into WordValue;
+        end;
+    end
+    pre emptyWord: wordValue->isEmpty()
+    pre longEnough: text.size() >= 3
+    post oneLetterPerChar: wordValue->size() = text.size()
+    post spellsText: getValue() = text
+    post freshLetters: wordValue->forAll(l | l.oclIsNew())
+    post ownedOnlyByThisWord: wordValue->forAll(l | l.wordsWithLetters = self)
+
+    getValue() : String =
+        wordValue->iterate(l : Letter; acc : String = '' | acc.concat(l.getValue()))
+    reverseWord() : String =
+        wordValue->reverse()->iterate(l : Letter; acc : String = '' | acc.concat(l.getValue()))
+    matchesPattern(pattern : String) : Boolean 
+    matchesPatternInReverse(pattern : String) : Boolean
+end
+
+class Dictionary
+attributes
+    searchOption : SolvingDirection
+operations
+    addWord(word : String) : Boolean
+    findWord(word : String) : Boolean
+    findPotentialWord(wordPrefix : String) : Set(Word)
+    findWordWithPattern(wordPattern : String) : Set(Word)
+    getWords() : OrderedSet(Word)
+    removeWord(word : String) : Boolean
+end
+
+/* ------------------------------------------------------------------ */
+/* CLASSes: dictionary implementation (Bridge), AVL only              */
+/* ------------------------------------------------------------------ */
+
+abstract class CollectionImpl
+operations
+    add(value : String)
+    remove(value : String)
+    contains(value : String) : Boolean
+    getWords() : OrderedSet(Word)
+    searchForPrefix(value : String) : Set(String)
+    searchForPattern(value : String) : Set(String)
+end
+
+abstract class Tree < CollectionImpl
+end
+
+abstract class BinaryTree < Tree
+operations
+    inOrder() : OrderedSet(Word)
+end
+
+abstract class BinarySearchTree < BinaryTree
+operations
+    getNodes() : Set(TreeNode) =
+        if root.isUndefined()
+        then Set{}
+        else Set{root}->closure(children)->including(root)
+        endif   
+
+    /*returns the node a new node should be the child of*/
+    findInsertionSlot(word : String) : TreeNode
+    begin
+        declare current : TreeNode, next : TreeNode, done : Boolean;
+        current := self.root;
+        done := false;
+        while done = false do
+            if word < current.value.getValue()
+            then next := current.leftChild();
+            else next := current.rightChild();
+            end;
+            if next.isUndefined()
+            then done := true;
+            else current := next;
+            end;
+        end;
+
+        result := current;
+    end
+    pre rootExists: root->notEmpty()
+    post inTree: getNodes() -> includes(result)
+    post treeUnchanged: getNodes() = getNodes@pre()
+    post slotIsEmpty:
+        if word < result.value.getValue()
+        then result.leftChild().isUndefined()
+        else result.rightChild().isUndefined()
+        endif
+end
+
+abstract class BalancedBinaryTree < BinarySearchTree
+operations
+    /* z's left child y becomes the subtree root; y's right child t moves under z */
+    rotateRight(z : TreeNode)
+    begin
+        declare p : TreeNode, y : TreeNode, t : TreeNode;
+        p := z.parent;
+        y := z.leftChild();
+        t := y.rightChild();
+
+        if p.isUndefined()
+        then delete (self, z) from TreeRoot;
+        else delete (p, z) from Children;
+        end;
+        delete (z, y) from Children;
+        if not t.isUndefined()
+        then delete (y, t) from Children;
+        end;
+
+        if p.isUndefined()
+        then insert (self, y) into TreeRoot;
+        else insert (p, y) into Children;
+        end;
+        insert (y, z) into Children;
+        if not t.isUndefined()
+        then insert (z, t) into Children;
+        end;
+    end
+    pre zInTree: getNodes()->includes(z)
+    pre hasLeftChild: not z.leftChild().isUndefined()
+    post sameNodes: getNodes() = getNodes@pre()
+    post zBelowPivot: z.parent.rightChild() = z
+
+    /* z's right child y becomes the subtree root; y's left child t moves under z */
+    rotateLeft(z : TreeNode)
+    begin
+        declare p : TreeNode, y : TreeNode, t : TreeNode;
+        p := z.parent;
+        y := z.rightChild();
+        t := y.leftChild();
+
+        if p.isUndefined()
+        then delete (self, z) from TreeRoot;
+        else delete (p, z) from Children;
+        end;
+        delete (z, y) from Children;
+        if not t.isUndefined()
+        then delete (y, t) from Children;
+        end;
+
+        if p.isUndefined()
+        then insert (self, y) into TreeRoot;
+        else insert (p, y) into Children;
+        end;
+        insert (y, z) into Children;
+        if not t.isUndefined()
+        then insert (z, t) into Children;
+        end;
+    end
+    pre zInTree: getNodes()->includes(z)
+    pre hasRightChild: not z.rightChild().isUndefined()
+    post sameNodes: getNodes() = getNodes@pre()
+    post zBelowPivot: z.parent.leftChild() = z
+end
+
+class AVLTree < BalancedBinaryTree
+operations
+    add(value : String)
+    begin
+        declare tn : TreeNode, target : TreeNode, current : TreeNode;
+        tn := new TreeNode();
+        tn.initialise(value);
+
+        if self.root.isUndefined()
+        then insert (self, tn) into TreeRoot;
+        else
+            target := self.findInsertionSlot(value);
+            insert (target, tn) into Children;
+        end;
+
+        -- walk up from the new node, rebalancing each ancestor
+        current := tn.parent;
+        while not current.isUndefined() do
+            self.rebalance(current);
+            current := current.parent;
+        end;
+    end
+    pre notPresent: getNodes()->forAll(n | n.value.getValue() <> value)
+    post present: getNodes()->exists(n | n.value.getValue() = value)
+    post oneMore: getNodes()->size() = getNodes@pre()->size() + 1
+
+    rebalance(n : TreeNode)
+    begin
+        if n.getBalanceFactor() > 1
+        then
+            if n.leftChild().getBalanceFactor() >= 0
+            then self.rotateRight(n);                  -- left-left
+            else
+                self.rotateLeft(n.leftChild());        -- left-right
+                self.rotateRight(n);
+            end;
+        else
+            if n.getBalanceFactor() < -1
+            then
+                if n.rightChild().getBalanceFactor() <= 0
+                then self.rotateLeft(n);               -- right-right
+                else
+                    self.rotateRight(n.rightChild());  -- right-left
+                    self.rotateLeft(n);
+                end;
+            end;
+        end;
+    end
+    pre inTree: getNodes()->includes(n)
+    pre notTooFar: n.getBalanceFactor().abs() <= 2
+    post sameNodes: getNodes() = getNodes@pre()
+    post nodeBalanced: n.getBalanceFactor().abs() <= 1
+
+    constraints
+    inv avlBalanced: getNodes()->forAll(n | n.getBalanceFactor().abs() <= 1)
+end
+
+abstract class Node
+end
+
+class TreeNode < Node
+attributes
+operations
+    initialise(word : String)
+    begin
+        declare wd : Word;
+        wd := new Word();
+        wd.initialise(word);
+        insert (self, wd) into Value;
+    end
+    pre noValueYet: value.isUndefined()
+    post holdsWord: value.getValue() = word
+
+    leftChild() : TreeNode =
+        children->select(c | c.value.getValue() < self.value.getValue())->any(true)
+
+    rightChild() : TreeNode =
+        children->select(c | c.value.getValue() >= self.value.getValue())->any(true)
+
+    height() : Integer =
+        if children->isEmpty()
+        then 1
+        else 1 + children->collect(c | c.height())->max()
+        endif
+
+    leftHeight() : Integer =
+        if leftChild().isUndefined() then 0 else leftChild().height() endif
+
+    rightHeight() : Integer =
+        if rightChild().isUndefined() then 0 else rightChild().height() endif
+
+    getBalanceFactor() : Integer = leftHeight() - rightHeight()
+
+    constraints
+    inv atMostTwoChildren: children->size() <= 2
+    inv oneLeftOneRight:
+        children->select(c | c.value.getValue() < self.value.getValue())->size() <= 1 and
+        children->select(c | c.value.getValue() >= self.value.getValue())->size() <= 1
+    inv bstOrdered:
+    children->forAll(c |
+        Set{c}->closure(children)->including(c)->forAll(d |
+            (c.value.getValue() < value.getValue()) =
+            (d.value.getValue() < value.getValue())))
+end
+
+/* ------------------------------------------------------------------ */
+/* ASSOCIATIONs                                                       */
+/* ------------------------------------------------------------------ */
+
+/* WordsOnGrid */
+
+composition Games between
+    WordsOnGrid[1] role wordsOnGrid
+    Game[*] role games
+end
+
+composition RegisteredPlayers between
+    WordsOnGrid[1] role wordsOnGrid
+    Player[*] role players
+end
+
+/* Game */
+
+aggregation GameCells between
+    Game[1] role game
+    Cell[*] role gameCells ordered
+end
+
+composition GameUnits between
+    Game[1] role game
+    SolvableUnit[*] role gameUnits
+end
+
+aggregation GamePlay between
+    Game[0..1] role game
+    Play[*] role plays ordered
+end
+
+association GamePlayers between
+    Game[*] role games
+    Player[0..2] role players
+end
+
+association GameWinner between          -- derived (/winner) on the diagram
+    Game[*] role gamesWon
+    Player[0..1] role winner
+end
+
+aggregation GameDictionary between
+    Dictionary[1] role dictionary
+    Game[*] role games
+end
+
+/* Play, Cell and Letter */
+
+association CellPlay between
+    Cell[1] role cell
+    Play[1..2] role play
+end
+
+association CellValue between
+    Cell[*] role valueForCell
+    Letter[0..1] role valueInCell
+end
+
+association PlayValue between
+    Letter[0..1] role playValue
+    Play[*] role play
+end
+
+aggregation WhoPlayed between
+    Player[0..1] role player
+    Play[*] role plays ordered
+end
+
+/* Solvable units */
+
+aggregation LinkedCells between         -- suCells is derived (/suCells) on the diagram
+    Cell[3..*] role suCells ordered
+    SolvableUnit[0..4] role belongsTo
+end
+
+association PotentialWords between      -- derived (/potentialWords) on the diagram
+    Word[*] role potentialWords
+    SolvableUnit[*] role potentialFor
+end
+
+/* Words and dictionary */
+
+association DictionaryWords between     -- derived (/words) on the diagram
+    Dictionary[1] role dictionary
+    Word[*] role words ordered
+end
+
+aggregation WordValue between
+    Word[0..1] role wordsWithLetters
+    Letter[3..*] role wordValue ordered
+end
+
+aggregation ImplementedWith between
+    BinarySearchTree[1] role implementation
+    Dictionary[1..*] role dictionary
+end
+
+/* Tree structure */
+
+composition Nodes between
+    CollectionImpl[0..1] role collection union
+    Node[*] role nodes ordered union
+end
+
+composition  TreeRoot between
+    Tree[0..1] role tree subsets collection redefines collection
+    TreeNode[0..1] role root subsets nodes redefines nodes
+end
+
+composition Children between
+    TreeNode[0..1] role parent
+    TreeNode[*] role children ordered
+end
+
+aggregation Value between
+    Node[1..*] role node
+    NodeValue[1] role value
+end
+
+constraints
+
+context WordsOnGrid
+    inv UniqueGameIds: self.games->isUnique(g | g.id)
+    inv UniqueUsernames: self.players->isUnique(p | p.username)
+
+context Player
+    inv NonEmptyUsername: self.username.isDefined() and self.username.size() > 0
+    inv RegisteredInEachGame: self.games->forAll(g | g.wordsOnGrid = self.wordsOnGrid)
+    inv PlayOrderMatchesGameOrder:
+        self.games->forAll(g |
+            self.plays->select(p | p.game = g) = g.plays->select(p | p.player = self))
+
+context Game
+    inv ValidSetup:
+        self.id.isDefined() and self.sizeOfWords >= 3 and self.status.isDefined() and
+        self.dictionary.words->notEmpty() and self.dictionary.words->forAll(w |
+            w.wordValue->size() = self.sizeOfWords)
+    inv RegisteredParticipants: self.wordsOnGrid.players->includesAll(self.players)
+    inv TwoPlayersWhenPlaying:
+        (Set{#Started, #Paused, #Completed, #StaleMated}->includes(self.status) or
+         self.plays->notEmpty()) implies self.players->size() = 2
+    inv ValidBoard:
+        if self.status = #Created or
+            (self.status = #Abandoned and self.gameCells->isEmpty()) then
+            self.gameCells->isEmpty() and self.gameUnits->isEmpty() and self.plays->isEmpty()
+        else
+            self.solvingUnits.isDefined() and self.solvingDirection.isDefined() and
+            self.dictionary.searchOption = self.solvingDirection and self.boardReady()
+        endif
+    inv NoMovesBeforeStart: self.rosterOpen() implies self.plays->isEmpty()
+    inv ValidCellCoordinates:
+        self.gameCells->forAll(c | c.row >= 1 and c.row <= self.sizeOfWords and
+            c.column >= 1 and c.column <= self.sizeOfWords) and
+        self.gameCells->forAll(a, b | a = b or a.row <> b.row or a.column <> b.column)
+    inv BoardUsesAllowedLetters:
+        self.gameCells->forAll(c | c.valueInCell.isUndefined() or
+            self.alphabetForWords()->includes(c.valueInCell))
+    inv AlternatingTurns:
+        if self.plays->size() < 2 then true else
+            Sequence{2..self.plays->size()}->forAll(i |
+                self.plays->at(i - 1).player <> self.plays->at(i).player)
+        endif
+    inv WinnerIsLastPlayer:
+        if self.status = #Completed then
+            self.plays->notEmpty() and self.winner = self.plays->last().player and
+            self.hasWinningWord()
+        else self.winner.isUndefined() endif
+    inv StalemateHasNoPossibleWord:
+        self.status = #StaleMated implies not self.hasPotentialWord()
+    inv ActiveGameCanContinue:
+        Set{#Started, #Paused}->includes(self.status) implies
+            (self.hasPotentialWord() and not self.hasWinningWord())
+
+context Play
+    inv SetupOrPlayerTurn:
+        if self.game.isUndefined() then
+            self.player.isUndefined() and
+            self.cell.play->one(p | p.game.isUndefined())
+        else
+            self.player.isDefined() and self.game.players->includes(self.player) and
+            self.cell.game = self.game and self.playValue.isDefined() and
+            self.cell.play->size() = 2 and
+            self.cell.play->exists(p | p.game.isUndefined() and p.playValue.isUndefined())
+        endif
+    inv AllowedLetter:
+        self.playValue.isUndefined() or
+        self.cell.game.alphabetForWords()->includes(self.playValue)
+    inv CellShowsEffectivePlay:
+        (self.game.isDefined() or self.cell.play->size() = 1) implies
+            self.cell.valueInCell = self.playValue
+
+context WordsOnGrid::addGame(sizeOfWords : Integer, dictionary : Set(String))
+    pre ValidInput: sizeOfWords >= 3 and dictionary->notEmpty() and
+        dictionary->forAll(w | w.size() = sizeOfWords)
+    post ExpectedOutcome: let added : Set(Game) = self.games - self.games@pre in
+        added->size() = 1 and self.games->includesAll(self.games@pre) and
+        added->forAll(g | g.oclIsNew() and g.sizeOfWords = sizeOfWords and
+            g.status = #Created and g.players->isEmpty() and
+            g.gameCells->isEmpty() and g.gameUnits->isEmpty() and
+            g.plays->isEmpty() and g.dictionary.words->collect(w | w.getValue())->asSet() = dictionary)
+        and self.players = self.players@pre
+
+context WordsOnGrid::addPlayer(username : String) : Boolean
+    pre ValidInput: username.size() > 0
+    post ExpectedOutcome: if self.players@pre->exists(p | p.username@pre = username) then
+        not result and self.players = self.players@pre
+    else
+        let added : Set(Player) = self.players - self.players@pre in
+        result and self.players->includesAll(self.players@pre) and
+        added->size() = 1 and added->forAll(p | p.oclIsNew() and p.username = username)
+    endif
+    post GamesPreserved: self.games = self.games@pre
+
+context WordsOnGrid::addPlayerToGame(player : String, gameId : Integer)
+    pre ValidInput: self.players->exists(p | p.username = player) and
+        self.games->exists(g | g.id = gameId and g.rosterOpen() and
+            g.players->size() < 2 and g.players->forAll(p | p.username <> player))
+    post ExpectedOutcome: let g : Game = self.games->any(x | x.id = gameId) in
+    let p : Player = self.players->any(x | x.username = player) in
+        g.players = g.players@pre->including(p) and self.games = self.games@pre and
+        self.players = self.players@pre and self.games->excluding(g)->forAll(other |
+            other.players = other.players@pre)
+
+context WordsOnGrid::removeGame(id : Integer)
+    pre ValidInput: self.games->exists(g | g.id = id)
+    post ExpectedOutcome:
+        let deleted : Game = self.games@pre->any(g | g.id@pre = id) in
+        self.games = self.games@pre->excluding(deleted) and self.players = self.players@pre and
+        Game.allInstances = Game.allInstances@pre->excluding(deleted) and
+        Play.allInstances = Play.allInstances@pre->reject(p |
+            deleted.gameCells@pre->includes(p.cell@pre)) and
+        Cell.allInstances = Cell.allInstances@pre - deleted.gameCells@pre->asSet() and
+        SolvableUnit.allInstances = SolvableUnit.allInstances@pre - deleted.gameUnits@pre
+
+context WordsOnGrid::removePlayer(username : String)
+    pre ValidInput: self.players->exists(p | p.username = username and
+        p.games->isEmpty() and p.gamesWon->isEmpty() and p.plays->isEmpty())
+    post ExpectedOutcome: self.players = self.players@pre->reject(p | p.username@pre = username) and
+        Player.allInstances = Player.allInstances@pre->reject(p |
+            self.players@pre->includes(p) and p.username@pre = username) and self.games = self.games@pre
+
+context WordsOnGrid::removePlayerFromGame(player : String, gameId : Integer)
+    pre ValidInput: self.games->exists(g | g.id = gameId and g.rosterOpen() and
+        g.players->exists(p | p.username = player))
+    post ExpectedOutcome: let g : Game = self.games->any(x | x.id = gameId) in
+        g.players = g.players@pre->reject(p | p.username@pre = player) and self.games = self.games@pre and
+        self.players = self.players@pre and self.games->excluding(g)->forAll(other |
+            other.players = other.players@pre)
+
+context Game::addDictionary(words : Set(String))
+    pre ValidInput: self.status = #Created and self.dictionary.games->size() = 1 and
+        self.dictionary.implementation.oclIsKindOf(AVLTree) and words->notEmpty() and
+        words->forAll(w | w.size() = self.sizeOfWords)
+    post ExpectedOutcome: self.dictionary = self.dictionary@pre and
+        self.dictionaryValues() = self.dictionaryValues@pre()->union(words)
+
+context Game::addPlay(row : Integer, column : Integer, value : Letter)
+    pre ValidInput: self.canPlayAt(row, column, value)
+    post ExpectedOutcome: self.plays->size() = self.plays@pre->size() + 1 and
+    self.plays = self.plays@pre->append(self.plays->last()) and
+    self.plays->last().oclIsNew() and self.plays->last().playValue = value and
+    self.plays->last().cell = self.cellAt(row, column) and
+    self.cellAt(row, column).valueInCell = value and
+    self.cellAt(row, column).play->size() = 2 and
+    self.cellAt(row, column).play =
+        self.cellAt@pre(row, column).play@pre->including(self.plays->last()) and
+    self.gameCells = self.gameCells@pre and
+    self.gameCells->excluding(self.cellAt(row, column))->forAll(c |
+        c.valueInCell = c.valueInCell@pre) and self.players = self.players@pre and
+    (if self.hasWinningWord() then self.status = #Completed
+     else if self.hasPotentialWord() then self.status = #Started
+     else self.status = #StaleMated endif endif)
+
+context Game::addPlayers(players : Set(Player))
+    pre ValidInput: self.rosterOpen() and players->notEmpty() and
+        self.wordsOnGrid.players->includesAll(players) and
+        self.players->intersection(players)->isEmpty() and
+        self.players->union(players)->size() <= 2
+    post ExpectedOutcome: self.players = self.players@pre->union(players)
+
+context Game::findWordWithPrefix(prefix : String) : Set(Word)
+    pre ValidInput: prefix.size() > 0 and prefix.size() <= self.sizeOfWords
+    post ExpectedOutcome: result = self.matchingPrefix(prefix) and
+        result->forAll(w | self.dictionary.words->includes(w))
+
+context Game::findWordWithPattern(wordPattern : String) : Set(Word)
+    pre ValidInput: wordPattern.size() = self.sizeOfWords
+    post ExpectedOutcome: result = self.matchingPattern(wordPattern) and
+        result->forAll(w | self.dictionary.words->includes(w))
+
+context Game::initialiseBoard(layout : Sequence(String))
+    -- The layout is in row-major order. A dash means an empty cell.
+    pre ValidInput: self.status = #Created and self.dictionary.words->notEmpty() and
+        self.solvingDirection.isDefined() and self.solvingUnits.isDefined() and
+        layout->size() = self.sizeOfWords * self.sizeOfWords and
+        layout->forAll(token | token = '-' or
+            self.alphabetForWords()->exists(l | l.getValue() = token))
+    post ExpectedOutcome: self.status = #FullyInitialised and self.boardReady() and
+        self.gameCells->forAll(c |
+            let position : Integer = (c.row - 1) * self.sizeOfWords + c.column in
+            let token : String = layout->at(position) in
+                c.oclIsNew() and c.play->size() = 1 and
+                c.play->forAll(p | p.oclIsNew() and p.game.isUndefined() and
+                    p.player.isUndefined() and c.valueInCell = p.playValue) and
+                (if token = '-' then c.valueInCell.isUndefined()
+                 else c.valueInCell.getValue() = token and
+                    self.alphabetForWords()->includes(c.valueInCell) endif)) and
+        self.gameUnits->forAll(u | u.oclIsNew()) and
+        self.plays->isEmpty() and self.players = self.players@pre
+
+context Game::removePlayers()
+    pre ValidInput: self.rosterOpen() and self.players->notEmpty()
+    post ExpectedOutcome: self.players->isEmpty() and Player.allInstances = Player.allInstances@pre
+
+context Game::updateStatus(status : GameStatus) : Boolean
+    pre ValidInput: status.isDefined()
+    post ExpectedOutcome: result = self.canChangeStatus@pre(status) and
+        self.status = (if result then status else self.status@pre endif) and
+        self.plays = self.plays@pre and self.players = self.players@pre and
+        self.gameCells = self.gameCells@pre and self.gameUnits = self.gameUnits@pre and
+        self.winner = self.winner@pre
+
+context Player::play(gameID : Integer, row : Integer, column : Integer, value : Letter)
+    pre ValidInput: self.games->exists(g | g.id = gameID and g.canPlayAt(row, column, value) and
+        (if g.plays->isEmpty() then true else g.plays->last().player <> self endif))
+    post ExpectedOutcome: let g : Game = self.games->any(x | x.id = gameID) in
+        g.plays = g.plays@pre->append(g.plays->last()) and
+        g.plays->last().oclIsNew() and g.plays->last().player = self and
+        g.plays->last().playValue = value and g.plays->last().cell = g.cellAt(row, column) and
+        g.cellAt(row, column).valueInCell = value and
+        g.cellAt(row, column).play->size() = 2 and
+        g.cellAt(row, column).play =
+            g.cellAt@pre(row, column).play@pre->including(g.plays->last()) and
+        self.plays = self.plays@pre->append(g.plays->last()) and
+        g.gameCells = g.gameCells@pre and
+        g.gameCells->excluding(g.cellAt(row, column))->forAll(c |
+            c.valueInCell = c.valueInCell@pre) and
+        (if g.hasWinningWord() then g.status = #Completed
+         else if g.hasPotentialWord() then g.status = #Started
+         else g.status = #StaleMated endif endif)
+
+context Play::updateValue(value : Letter)
+    pre ValidInput: value.isDefined() and value = self.playValue
+    post ExpectedOutcome: self.playValue = value and self.cell = self.cell@pre and
+        self.game = self.game@pre and self.player = self.player@pre and
+        self.cell.valueInCell = (self.cell@pre).valueInCell@pre
